@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Supported CPU architectures for QEMU emulation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Arch {
     #[serde(rename = "x86_64", alias = "X86_64")]
+    #[default]
     X86_64,
     #[serde(rename = "i386", alias = "I386")]
     I386,
@@ -54,11 +55,6 @@ impl Arch {
     }
 }
 
-impl Default for Arch {
-    fn default() -> Self {
-        Arch::X86_64
-    }
-}
 
 impl fmt::Display for Arch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -67,9 +63,10 @@ impl fmt::Display for Arch {
 }
 
 /// Hardware accelerators supported across operating systems
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Accelerator {
     #[serde(rename = "auto", alias = "Auto")]
+    #[default]
     Auto,
     #[serde(rename = "whpx", alias = "WHPX")]
     WHPX,
@@ -103,11 +100,6 @@ impl Accelerator {
     }
 }
 
-impl Default for Accelerator {
-    fn default() -> Self {
-        Accelerator::Auto
-    }
-}
 
 impl fmt::Display for Accelerator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -116,9 +108,10 @@ impl fmt::Display for Accelerator {
 }
 
 /// Disk image formats supported by QEMU
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DriveFormat {
     #[serde(rename = "qcow2", alias = "Qcow2")]
+    #[default]
     Qcow2,
     #[serde(rename = "raw", alias = "Raw")]
     Raw,
@@ -140,11 +133,6 @@ impl DriveFormat {
     }
 }
 
-impl Default for DriveFormat {
-    fn default() -> Self {
-        DriveFormat::Qcow2
-    }
-}
 
 impl fmt::Display for DriveFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -153,9 +141,10 @@ impl fmt::Display for DriveFormat {
 }
 
 /// Interface bus types for virtual drives
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DriveInterface {
     #[serde(rename = "virtio", alias = "VirtIO")]
+    #[default]
     VirtIO,
     #[serde(rename = "ide", alias = "Ide")]
     Ide,
@@ -189,11 +178,6 @@ impl DriveInterface {
     }
 }
 
-impl Default for DriveInterface {
-    fn default() -> Self {
-        DriveInterface::VirtIO
-    }
-}
 
 impl fmt::Display for DriveInterface {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

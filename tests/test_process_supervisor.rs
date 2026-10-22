@@ -294,12 +294,10 @@ fn test_vm_process_kill_terminates_running_process() {
     let start = Instant::now();
     let mut saw_online = false;
     while start.elapsed() < Duration::from_secs(5) {
-        if let Ok(event) = rx.recv_timeout(Duration::from_millis(100)) {
-            if let QemuEvent::Stdout(l) = event {
-                if l.contains("ONLINE_NOW") {
-                    saw_online = true;
-                    break;
-                }
+        if let Ok(QemuEvent::Stdout(l)) = rx.recv_timeout(Duration::from_millis(100)) {
+            if l.contains("ONLINE_NOW") {
+                saw_online = true;
+                break;
             }
         }
     }
