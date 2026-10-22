@@ -3,3 +3,6 @@ Cargo.lock
 *.tmp
 vms.json
 settings.json
+*.qcow2
+*.img
+FLUX-*.jpeg

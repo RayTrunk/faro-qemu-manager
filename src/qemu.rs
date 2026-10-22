@@ -14,7 +14,7 @@ pub fn resolve_accelerator(accel: Accelerator) -> &'static str {
         Accelerator::Auto => {
             #[cfg(target_os = "windows")]
             {
-                "whpx"
+                "whpx,kernel-irqchip=off"
             }
             #[cfg(target_os = "linux")]
             {
@@ -25,9 +25,28 @@ pub fn resolve_accelerator(accel: Accelerator) -> &'static str {
                 "tcg"
             }
         }
-        Accelerator::WHPX => "whpx",
-        Accelerator::HAXM => "haxm",
-        Accelerator::KVM => "kvm",
+        Accelerator::WHPX => "whpx,kernel-irqchip=off",
+        Accelerator::HAXM => {
+            #[cfg(target_os = "windows")]
+            {
+                // HAXM is omitted in modern Windows 11 QEMU binaries; fallback to WHPX or TCG
+                "whpx,kernel-irqchip=off"
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                "hax"
+            }
+        }
+        Accelerator::KVM => {
+            #[cfg(target_os = "windows")]
+            {
+                "whpx,kernel-irqchip=off"
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                "kvm"
+            }
+        }
         Accelerator::TCG => "tcg",
     }
 }
@@ -170,8 +189,14 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
     // 2. CPU model and core count
     let cpu_model = vm.cpu_model.trim();
     if !cpu_model.is_empty() {
+        // "host" requires KVM on Linux or WHPX on Windows. If TCG fallback, map "host" to "max".
+        let effective_cpu = if cpu_model.eq_ignore_ascii_case("host") && accel_flag == "tcg" {
+            "max"
+        } else {
+            cpu_model
+        };
         args.push("-cpu".to_string());
-        args.push(cpu_model.to_string());
+        args.push(effective_cpu.to_string());
     }
     if vm.cpu_cores > 0 {
         args.push("-smp".to_string());

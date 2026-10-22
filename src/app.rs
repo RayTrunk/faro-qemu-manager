@@ -37,6 +37,7 @@ pub struct FaroQemApp {
     pub status_map: HashMap<Uuid, VmStatus>,
     pub cli_previews: HashMap<Uuid, String>,
     pub confirming_delete_id: Option<Uuid>,
+    pub logo_texture: Option<egui::TextureHandle>,
 }
 
 impl FaroQemApp {
@@ -82,6 +83,11 @@ impl FaroQemApp {
         let selected_vm_id = vms.first().map(|v| v.id);
         let i18n = I18n::new(&settings.language);
 
+        let logo_texture = ctx.and_then(|c| {
+            crate::ui::theme::load_app_logo()
+                .map(|img| c.load_texture("faro_logo", img, egui::TextureOptions::LINEAR))
+        });
+
         if let Some(c) = ctx {
             configure_modern_fonts(c);
             apply_theme(c, &settings.theme);
@@ -103,6 +109,7 @@ impl FaroQemApp {
             status_map: HashMap::new(),
             cli_previews: HashMap::new(),
             confirming_delete_id: None,
+            logo_texture,
         }
     }
 
@@ -314,8 +321,12 @@ impl FaroQemApp {
     fn render_empty_state(&self, ui: &mut egui::Ui) -> bool {
         let mut create_clicked = false;
         ui.vertical_centered(|ui| {
-            ui.add_space(80.0);
-            ui.label(egui::RichText::new("🖥").size(48.0));
+            ui.add_space(60.0);
+            if let Some(ref logo) = self.logo_texture {
+                ui.image((logo.id(), egui::vec2(120.0, 120.0)));
+            } else {
+                ui.label(egui::RichText::new("🖥").size(48.0));
+            }
             ui.add_space(8.0);
             ui.heading(egui::RichText::new("FARO QEM").size(28.0));
             ui.label(

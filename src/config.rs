@@ -43,8 +43,8 @@ impl Arch {
 
     pub fn default_cpu(&self) -> &'static str {
         match self {
-            Arch::X86_64 | Arch::I386 => "host",
-            Arch::Aarch64 => "host",
+            Arch::X86_64 | Arch::I386 => "max",
+            Arch::Aarch64 => "max",
             Arch::Riscv64 => "rv64",
             Arch::Arm => "cortex-a15",
         }

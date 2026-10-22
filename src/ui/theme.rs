@@ -421,3 +421,25 @@ pub fn section_header(ui: &mut Ui, title: &str) {
         ui.add_space(2.0);
     });
 }
+
+/// Load the embedded FARO QEM logo image.
+pub fn load_app_logo() -> Option<egui::ColorImage> {
+    let bytes = include_bytes!("../../assets/logo.jpeg");
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let pixels = img.into_raw();
+    Some(egui::ColorImage::from_rgba_unmultiplied(size, &pixels))
+}
+
+/// Load the embedded FARO QEM logo as window icon data.
+pub fn load_app_icon() -> Option<egui::IconData> {
+    let bytes = include_bytes!("../../assets/logo.jpeg");
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (width, height) = (img.width(), img.height());
+    let rgba = img.into_raw();
+    Some(egui::IconData {
+        rgba,
+        width,
+        height,
+    })
+}

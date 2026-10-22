@@ -69,6 +69,7 @@ pub struct SidebarView<'a> {
     pub vm_statuses: &'a HashMap<Uuid, VmStatus>,
     pub i18n: &'a I18n,
     pub confirming_delete_id: Option<&'a mut Option<Uuid>>,
+    pub logo: Option<&'a egui::TextureHandle>,
 }
 
 impl<'a> SidebarView<'a> {
@@ -87,7 +88,14 @@ impl<'a> SidebarView<'a> {
             vm_statuses,
             i18n,
             confirming_delete_id: None,
+            logo: None,
         }
+    }
+
+    /// Attach an optional logo texture to display in the header
+    pub fn with_logo(mut self, logo: Option<&'a egui::TextureHandle>) -> Self {
+        self.logo = logo;
+        self
     }
 
     /// Attach a mutable reference to track delete confirmation modal state
@@ -100,14 +108,24 @@ impl<'a> SidebarView<'a> {
     pub fn show(mut self, ui: &mut egui::Ui) -> Option<SidebarAction> {
         let mut action: Option<SidebarAction> = None;
 
-        // 1. Header: "FARO QEM" with subtitle "(C) R.Trunk 2026"
-        ui.vertical(|ui| {
-            ui.heading("FARO QEM");
-            ui.label(
-                egui::RichText::new("(C) R.Trunk 2026")
-                    .size(11.0)
-                    .color(ui.visuals().weak_text_color()),
-            );
+        // 1. Header: "FARO QEM" with subtitle "(C) R.Trunk 2026" and Logo
+        ui.horizontal(|ui| {
+            if let Some(logo) = self.logo {
+                ui.image((logo.id(), egui::vec2(36.0, 36.0)));
+            }
+            ui.vertical(|ui| {
+                ui.heading(
+                    egui::RichText::new("FARO QEM")
+                        .size(18.0)
+                        .strong()
+                        .color(COLOR_PRIMARY),
+                );
+                ui.label(
+                    egui::RichText::new("(C) R.Trunk 2026")
+                        .size(11.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+            });
         });
 
         ui.add_space(6.0);
