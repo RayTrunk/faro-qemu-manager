@@ -87,6 +87,7 @@ pub mod icons {
     pub const ERROR: &str = "\u{26D4}"; // ⛔
     pub const SEARCH: &str = "\u{1F50D}"; // 🔍
     pub const LOGS: &str = "\u{1F4DC}"; // 📜
+    pub const COPY: &str = "\u{1F4CB}"; // 📋
     pub const HELP: &str = "\u{2753}"; // ❓
     pub const INFO: &str = "\u{2139}"; // ℹ
 }

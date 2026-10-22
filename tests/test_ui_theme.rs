@@ -28,6 +28,7 @@ fn test_icons_constants() {
     assert_eq!(icons::DISK, "\u{1F5B4}");
     assert_eq!(icons::NETWORK, "\u{1F310}");
     assert_eq!(icons::CONSOLE, "\u{1F4BB}");
+    assert_eq!(icons::COPY, "\u{1F4CB}");
 }
 
 #[test]

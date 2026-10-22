@@ -10,6 +10,7 @@ use crate::config::{
 };
 use crate::i18n::I18n;
 use crate::qemu::{create_disk_image, find_qemu_img};
+use crate::ui::console::{ConsoleLogBuffer, ConsoleView};
 use crate::ui::theme::{
     card_frame, danger_button, icons, section_header, status_badge,
     COLOR_DARK_SURFACE_HOVER, COLOR_ERROR, COLOR_PRIMARY, COLOR_RUNNING, COLOR_STOPPED,
@@ -107,6 +108,9 @@ pub struct VmDetailView<'a> {
     pub active_tab: &'a mut DetailTab,
     pub qemu_img_binary: Option<&'a Path>,
     pub disk_modal: &'a mut CreateDiskState,
+    pub console_logs: Option<&'a mut ConsoleLogBuffer>,
+    pub pid: Option<u32>,
+    pub cli_command: Option<&'a str>,
 }
 
 impl<'a> VmDetailView<'a> {
@@ -126,7 +130,28 @@ impl<'a> VmDetailView<'a> {
             active_tab,
             qemu_img_binary,
             disk_modal,
+            console_logs: None,
+            pid: None,
+            cli_command: None,
         }
+    }
+
+    /// Attach live console log buffer to detail view
+    pub fn with_console(mut self, logs: &'a mut ConsoleLogBuffer) -> Self {
+        self.console_logs = Some(logs);
+        self
+    }
+
+    /// Set operating system process ID
+    pub fn with_pid(mut self, pid: u32) -> Self {
+        self.pid = Some(pid);
+        self
+    }
+
+    /// Set QEMU command line string
+    pub fn with_cli_command(mut self, cmd: &'a str) -> Self {
+        self.cli_command = Some(cmd);
+        self
     }
 
     /// Render the complete VM detail view, returning any action triggered
@@ -831,12 +856,19 @@ impl<'a> VmDetailView<'a> {
         });
     }
 
-    /// Tab 5: Live Console Placeholder
+    /// Tab 5: Live Console Output Stream
     fn show_console_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading(self.i18n.t("tab_console"));
         ui.add_space(6.0);
 
-        card_frame(ui.visuals()).show(ui, |ui| {
+        if let Some(logs) = &mut self.console_logs {
+            let mut view = ConsoleView::new(logs, self.i18n)
+                .is_running(self.is_running)
+                .pid(self.pid)
+                .cli_command(self.cli_command);
+            view.show(ui);
+        } else {
+            card_frame(ui.visuals()).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(icons::CONSOLE).size(24.0).color(COLOR_PRIMARY));
                 ui.vertical(|ui| {
@@ -892,6 +924,7 @@ impl<'a> VmDetailView<'a> {
                 }
             });
         });
+        }
     }
 
     /// Modal Dialog: Create New Disk Image
