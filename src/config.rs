@@ -316,6 +316,12 @@ impl VmConfig {
     }
 }
 
+impl Default for VmConfig {
+    fn default() -> Self {
+        Self::new_default("Debian 12", Arch::X86_64)
+    }
+}
+
 /// Global application settings
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSettings {
