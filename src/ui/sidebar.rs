@@ -108,27 +108,13 @@ impl<'a> SidebarView<'a> {
     pub fn show(mut self, ui: &mut egui::Ui) -> Option<SidebarAction> {
         let mut action: Option<SidebarAction> = None;
 
-        // 1. Header: "FARO QEM" with subtitle "(C) R.Trunk 2026" and Logo
-        ui.horizontal(|ui| {
-            if let Some(logo) = self.logo {
-                ui.image((logo.id(), egui::vec2(36.0, 36.0)));
-            }
-            ui.vertical(|ui| {
-                ui.heading(
-                    egui::RichText::new("FARO QEM")
-                        .size(18.0)
-                        .strong()
-                        .color(COLOR_PRIMARY),
-                );
-                ui.label(
-                    egui::RichText::new("(C) R.Trunk 2026")
-                        .size(11.0)
-                        .color(ui.visuals().weak_text_color()),
-                );
+        // 1. Header: Application Logo (Emblem)
+        if let Some(logo) = self.logo {
+            ui.vertical_centered(|ui| {
+                ui.image((logo.id(), egui::vec2(44.0, 44.0)));
             });
-        });
-
-        ui.add_space(6.0);
+            ui.add_space(4.0);
+        }
 
         // 2. Search filter input with clear button
         ui.horizontal(|ui| {
@@ -156,49 +142,46 @@ impl<'a> SidebarView<'a> {
         ui.add_space(6.0);
 
         // 3. VM Actions Toolbar (Positioned at TOP so it is ALWAYS visible and never overflows the window)
-        ui.columns(2, |cols| {
-            // Col 0: [+ New VM] (Primary Klein Blue)
-            let new_btn = egui::Button::new(
-                egui::RichText::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
-                    .strong()
-                    .color(Color32::WHITE),
-            )
-            .fill(COLOR_PRIMARY)
-            .min_size(egui::vec2(cols[0].available_width(), 28.0));
-            if cols[0].add(new_btn).clicked() {
-                action = Some(SidebarAction::NewVm);
-            }
+        // Primary Action: [+ New VM]
+        let new_btn = egui::Button::new(
+            egui::RichText::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
+                .strong()
+                .color(Color32::WHITE),
+        )
+        .fill(COLOR_PRIMARY)
+        .min_size(egui::vec2(ui.available_width(), 28.0));
+        if ui.add(new_btn).clicked() {
+            action = Some(SidebarAction::NewVm);
+        }
 
-            // Col 1: [Duplicate] (enabled if VM selected)
+        ui.add_space(4.0);
+
+        // Secondary Actions: [Duplicate] and [Delete]
+        ui.columns(2, |cols| {
             let can_dup = self.selected_vm_id.is_some();
             let dup_btn = egui::Button::new(
                 egui::RichText::new(format!("{} {}", icons::EDIT, self.i18n.t("duplicate"))).color(
                     if can_dup {
-                        cols[1].visuals().text_color()
+                        cols[0].visuals().text_color()
                     } else {
-                        cols[1].visuals().weak_text_color()
+                        cols[0].visuals().weak_text_color()
                     },
                 ),
             )
-            .min_size(egui::vec2(cols[1].available_width(), 28.0));
-            if cols[1].add_enabled(can_dup, dup_btn).clicked() {
+            .min_size(egui::vec2(cols[0].available_width(), 26.0));
+            if cols[0].add_enabled(can_dup, dup_btn).clicked() {
                 if let Some(id) = self.selected_vm_id {
                     action = Some(SidebarAction::DuplicateVm(id));
                 }
             }
-        });
 
-        ui.add_space(4.0);
-
-        ui.columns(2, |cols| {
-            // Col 0: [Delete] (enabled if VM selected)
             let can_del = self.selected_vm_id.is_some();
             let del_btn = egui::Button::new(
                 egui::RichText::new(format!("{} {}", icons::DELETE, self.i18n.t("delete"))).color(
                     if can_del {
                         COLOR_ERROR
                     } else {
-                        cols[0].visuals().weak_text_color()
+                        cols[1].visuals().weak_text_color()
                     },
                 ),
             )
@@ -207,9 +190,9 @@ impl<'a> SidebarView<'a> {
             } else {
                 Color32::TRANSPARENT
             })
-            .min_size(egui::vec2(cols[0].available_width(), 26.0));
+            .min_size(egui::vec2(cols[1].available_width(), 26.0));
 
-            if cols[0].add_enabled(can_del, del_btn).clicked() {
+            if cols[1].add_enabled(can_del, del_btn).clicked() {
                 if let Some(id) = self.selected_vm_id {
                     if let Some(ref mut confirm_slot) = self.confirming_delete_id {
                         **confirm_slot = Some(id);
@@ -217,16 +200,6 @@ impl<'a> SidebarView<'a> {
                         action = Some(SidebarAction::DeleteVm(id));
                     }
                 }
-            }
-
-            // Col 1: [⚙ Settings]
-            let set_btn = egui::Button::new(
-                egui::RichText::new(format!("{} {}", icons::SETTINGS, self.i18n.t("settings")))
-                    .color(cols[1].visuals().text_color()),
-            )
-            .min_size(egui::vec2(cols[1].available_width(), 26.0));
-            if cols[1].add(set_btn).clicked() {
-                action = Some(SidebarAction::OpenSettings);
             }
         });
 

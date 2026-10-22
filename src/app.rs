@@ -329,13 +329,6 @@ impl FaroQemApp {
             } else {
                 ui.label(egui::RichText::new("🖥").size(48.0));
             }
-            ui.add_space(8.0);
-            ui.heading(egui::RichText::new("FARO QEM").size(28.0));
-            ui.label(
-                egui::RichText::new("(C) R.Trunk 2026")
-                    .size(13.0)
-                    .color(ui.visuals().weak_text_color()),
-            );
             ui.add_space(16.0);
             ui.label(
                 egui::RichText::new(
@@ -361,10 +354,8 @@ impl FaroQemApp {
 
         let mut menu_sidebar_action: Option<SidebarAction> = None;
         let mut menu_detail_action: Option<VmDetailAction> = None;
-        let mut new_theme_to_set: Option<&'static str> = None;
-        let mut new_locale_to_set: Option<&'static str> = None;
 
-        // 2. Top Menu Bar (Global application commands & Settings menu)
+        // 2. Top Menu Bar (Global application commands & Settings)
         egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 // File Menu
@@ -408,14 +399,6 @@ impl FaroQemApp {
                         if let Some(id) = self.selected_vm_id {
                             self.confirming_delete_id = Some(id);
                         }
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui
-                        .button(format!("{} {}", icons::SETTINGS, self.i18n.t("settings")))
-                        .clicked()
-                    {
-                        self.settings_open = true;
                         ui.close_menu();
                     }
                     ui.separator();
@@ -475,52 +458,6 @@ impl FaroQemApp {
                     }
                 });
 
-                // Settings Menu (Prominent top menu item)
-                ui.menu_button(self.i18n.t("menu_settings"), |ui| {
-                    if ui
-                        .button(format!(
-                            "{} {}",
-                            icons::SETTINGS,
-                            self.i18n.t("open_settings")
-                        ))
-                        .clicked()
-                    {
-                        self.settings_open = true;
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    ui.label(egui::RichText::new(self.i18n.t("theme")).weak().size(11.0));
-                    let dark_active = self.settings.theme.eq_ignore_ascii_case("dark");
-                    if ui
-                        .selectable_label(dark_active, self.i18n.t("dark"))
-                        .clicked()
-                    {
-                        new_theme_to_set = Some("dark");
-                        ui.close_menu();
-                    }
-                    let light_active = self.settings.theme.eq_ignore_ascii_case("light");
-                    if ui
-                        .selectable_label(light_active, self.i18n.t("light"))
-                        .clicked()
-                    {
-                        new_theme_to_set = Some("light");
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new(self.i18n.t("language"))
-                            .weak()
-                            .size(11.0),
-                    );
-                    for (code, name) in self.i18n.available_locales() {
-                        let is_curr = self.settings.language == code;
-                        if ui.selectable_label(is_curr, name).clicked() {
-                            new_locale_to_set = Some(code);
-                            ui.close_menu();
-                        }
-                    }
-                });
-
                 // Help Menu
                 ui.menu_button(self.i18n.t("menu_help"), |ui| {
                     if ui.button(self.i18n.t("about")).clicked() {
@@ -529,7 +466,7 @@ impl FaroQemApp {
                     }
                 });
 
-                // Right-aligned quick-access Settings button
+                // Right Upper Corner: Only location for Settings (Gear Symbol + "Settings")
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .button(format!("{} {}", icons::SETTINGS, self.i18n.t("settings")))
@@ -540,17 +477,6 @@ impl FaroQemApp {
                 });
             });
         });
-
-        if let Some(theme) = new_theme_to_set {
-            self.settings.theme = theme.to_string();
-            apply_theme(ctx, theme);
-            let _ = save_settings(&self.settings_path, &self.settings);
-        }
-        if let Some(locale) = new_locale_to_set {
-            self.settings.language = locale.to_string();
-            self.i18n.set_locale(locale);
-            let _ = save_settings(&self.settings_path, &self.settings);
-        }
 
         if let Some(action) = menu_sidebar_action {
             self.handle_sidebar_action(action, Some(ctx));

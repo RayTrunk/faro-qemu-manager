@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::config::{AppSettings, Arch};
 use crate::i18n::I18n;
 use crate::qemu::find_qemu_binary;
-use crate::ui::theme::{apply_theme, icons, section_header, COLOR_RUNNING, COLOR_WARNING};
+use crate::ui::theme::{apply_theme, icons, COLOR_RUNNING, COLOR_WARNING};
 
 /// Modal dialog for application settings
 pub struct SettingsDialog<'a> {
@@ -53,24 +53,7 @@ impl<'a> SettingsDialog<'a> {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]);
 
         window.show(ctx, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if let Some(logo) = self.logo {
-                    ui.image((logo.id(), egui::vec2(32.0, 32.0)));
-                }
-                ui.vertical(|ui| {
-                    ui.heading("FARO QEM");
-                    ui.label(
-                        egui::RichText::new("(C) R.Trunk 2026")
-                            .size(10.0)
-                            .color(ui.visuals().weak_text_color()),
-                    );
-                });
-            });
-            ui.add_space(4.0);
-            ui.separator();
-            ui.add_space(4.0);
-            section_header(ui, self.i18n.t("settings"));
+            ui.add_space(8.0);
 
             egui::Grid::new("settings_form_grid")
                 .num_columns(2)

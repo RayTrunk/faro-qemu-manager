@@ -360,7 +360,7 @@ pub fn section_header(ui: &mut Ui, title: &str) {
 
 /// Load the embedded FARO QEM logo image.
 pub fn load_app_logo() -> Option<egui::ColorImage> {
-    let bytes = include_bytes!("../../assets/logo.jpeg");
+    let bytes = include_bytes!("../../assets/logo.png");
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     let size = [img.width() as usize, img.height() as usize];
     let pixels = img.into_raw();
@@ -369,7 +369,7 @@ pub fn load_app_logo() -> Option<egui::ColorImage> {
 
 /// Load the embedded FARO QEM logo as window icon data (scaled to 128x128 for Win32/X11 compatibility).
 pub fn load_app_icon() -> Option<egui::IconData> {
-    let bytes = include_bytes!("../../assets/logo.jpeg");
+    let bytes = include_bytes!("../../assets/logo.png");
     let img = image::load_from_memory(bytes).ok()?;
     let resized = img
         .resize(128, 128, image::imageops::FilterType::Lanczos3)
