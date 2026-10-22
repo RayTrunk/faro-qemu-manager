@@ -73,5 +73,13 @@
   "light": "Hell",
   "qemu_dir": "QEMU-Programmverzeichnis",
   "select_folder": "Ordner wählen...",
-  "close": "Schließen"
+  "close": "Schließen",
+  "add_cdrom": "CD/DVD ISO hinzufügen",
+  "action": "Aktion",
+  "delete_confirm_msg": "Möchten Sie wirklich löschen",
+  "auto_scroll": "Automatischer Bildlauf",
+  "copy_logs": "Alle kopieren",
+  "lines_label": "Zeilen",
+  "filter_placeholder": "Filter...",
+  "filter_label": "Filter"
 }

@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Supported CPU architectures for QEMU emulation
@@ -51,10 +51,15 @@ impl Arch {
     }
 
     pub fn all() -> &'static [Arch] {
-        &[Arch::X86_64, Arch::I386, Arch::Aarch64, Arch::Riscv64, Arch::Arm]
+        &[
+            Arch::X86_64,
+            Arch::I386,
+            Arch::Aarch64,
+            Arch::Riscv64,
+            Arch::Arm,
+        ]
     }
 }
-
 
 impl fmt::Display for Arch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -100,7 +105,6 @@ impl Accelerator {
     }
 }
 
-
 impl fmt::Display for Accelerator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
@@ -132,7 +136,6 @@ impl DriveFormat {
         &[DriveFormat::Qcow2, DriveFormat::Raw, DriveFormat::Vmdk]
     }
 }
-
 
 impl fmt::Display for DriveFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -177,7 +180,6 @@ impl DriveInterface {
         ]
     }
 }
-
 
 impl fmt::Display for DriveInterface {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -418,10 +420,7 @@ fn atomic_write_file(path: &Path, data: &[u8]) -> Result<(), String> {
         }
     }
 
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("file");
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let unique = Uuid::new_v4();
     let temp_path = if let Some(parent) = path.parent() {
         parent.join(format!(".{}_{}.tmp", file_name, unique))
@@ -431,14 +430,22 @@ fn atomic_write_file(path: &Path, data: &[u8]) -> Result<(), String> {
 
     if let Err(e) = std::fs::write(&temp_path, data) {
         let _ = std::fs::remove_file(&temp_path);
-        return Err(format!("Failed to write temporary file {}: {}", temp_path.display(), e));
+        return Err(format!(
+            "Failed to write temporary file {}: {}",
+            temp_path.display(),
+            e
+        ));
     }
 
     #[cfg(not(windows))]
     {
         if let Err(e) = std::fs::rename(&temp_path, path) {
             let _ = std::fs::remove_file(&temp_path);
-            return Err(format!("Failed to rename temporary file to {}: {}", path.display(), e));
+            return Err(format!(
+                "Failed to rename temporary file to {}: {}",
+                path.display(),
+                e
+            ));
         }
     }
 

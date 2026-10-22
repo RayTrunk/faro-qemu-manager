@@ -1,8 +1,8 @@
 // FARO QEM (C) R.Trunk 2026
 // Live Console & Logs Viewer Component
 
-use std::time::SystemTime;
 use egui::{Color32, Frame, Margin, Rounding, Stroke, Ui};
+use std::time::SystemTime;
 
 use crate::i18n::I18n;
 use crate::qemu::QemuEvent;
@@ -77,7 +77,9 @@ pub fn strip_ansi_codes(input: &str) -> String {
 /// Generate a clean HH:MM:SS.mmm timestamp string from the system clock
 pub fn current_timestamp() -> String {
     let now = SystemTime::now();
-    let duration = now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
+    let duration = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
     let total_secs = duration.as_secs();
     let millis = duration.subsec_millis();
     let seconds = total_secs % 60;
@@ -122,7 +124,12 @@ impl LogEntry {
         if self.timestamp.is_empty() {
             format!("[{}] {}", self.level.label(), self.text)
         } else {
-            format!("[{}] [{}] {}", self.timestamp, self.level.label(), self.text)
+            format!(
+                "[{}] [{}] {}",
+                self.timestamp,
+                self.level.label(),
+                self.text
+            )
         }
     }
 }
@@ -364,11 +371,9 @@ impl<'a> ConsoleView<'a> {
                         &format!("● {} (code 0)", self.i18n.t("status_stopped")),
                         COLOR_STOPPED,
                     ),
-                    Some(code) => status_badge(
-                        ui,
-                        &format!("⚠ Exited (code {})", code),
-                        COLOR_ERROR,
-                    ),
+                    Some(code) => {
+                        status_badge(ui, &format!("⚠ Exited (code {})", code), COLOR_ERROR)
+                    }
                     None => status_badge(
                         ui,
                         &format!("● {}", self.i18n.t("status_stopped")),
@@ -384,20 +389,15 @@ impl<'a> ConsoleView<'a> {
             }
 
             // Auto-scroll checkbox
-            let auto_scroll_label = if self.i18n.current_locale() == "de" {
-                "Automatischer Bildlauf"
-            } else if self.i18n.current_locale() == "fr" {
-                "Défilement automatique"
-            } else {
-                "Auto-scroll"
-            };
-            ui.checkbox(&mut self.logs.auto_scroll, auto_scroll_label);
+            ui.checkbox(&mut self.logs.auto_scroll, self.i18n.t("auto_scroll"));
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Clear Button
                 let clear_text = format!("{} {}", icons::DELETE, self.i18n.t("clear"));
                 if ui
-                    .add(egui::Button::new(egui::RichText::new(clear_text).size(12.0)))
+                    .add(egui::Button::new(
+                        egui::RichText::new(clear_text).size(12.0),
+                    ))
                     .on_hover_text("Clear console buffer")
                     .clicked()
                 {
@@ -406,15 +406,11 @@ impl<'a> ConsoleView<'a> {
                 }
 
                 // Copy All Logs Button
-                let copy_logs_label = if self.i18n.current_locale() == "de" {
-                    format!("{} Alle kopieren", icons::COPY)
-                } else if self.i18n.current_locale() == "fr" {
-                    format!("{} Tout copier", icons::COPY)
-                } else {
-                    format!("{} Copy Logs", icons::COPY)
-                };
+                let copy_logs_label = format!("{} {}", icons::COPY, self.i18n.t("copy_logs"));
                 if ui
-                    .add(egui::Button::new(egui::RichText::new(copy_logs_label).size(12.0)))
+                    .add(egui::Button::new(
+                        egui::RichText::new(copy_logs_label).size(12.0),
+                    ))
                     .on_hover_text("Copy all console logs to clipboard")
                     .clicked()
                 {
@@ -424,13 +420,7 @@ impl<'a> ConsoleView<'a> {
                 }
 
                 // Line count label
-                let lines_suffix = if self.i18n.current_locale() == "de" {
-                    "Zeilen"
-                } else if self.i18n.current_locale() == "fr" {
-                    "lignes"
-                } else {
-                    "lines"
-                };
+                let lines_suffix = self.i18n.t("lines_label");
 
                 let count_str = if self.logs.filter.is_empty() {
                     format!("{} {}", self.logs.len(), lines_suffix)
@@ -450,16 +440,9 @@ impl<'a> ConsoleView<'a> {
                 ui.label(egui::RichText::new(count_str).size(12.0).weak());
 
                 // Filter search text edit
-                let search_placeholder = if self.i18n.current_locale() == "de" {
-                    "Filter..."
-                } else if self.i18n.current_locale() == "fr" {
-                    "Filtrer..."
-                } else {
-                    "Filter logs..."
-                };
                 ui.add(
                     egui::TextEdit::singleline(&mut self.logs.filter)
-                        .hint_text(search_placeholder)
+                        .hint_text(self.i18n.t("filter_placeholder"))
                         .desired_width(120.0),
                 );
             });
@@ -647,7 +630,5 @@ pub fn render_console_simple(
     is_running: bool,
     i18n: &I18n,
 ) -> Option<ConsoleAction> {
-    ConsoleView::new(logs, i18n)
-        .is_running(is_running)
-        .show(ui)
+    ConsoleView::new(logs, i18n).is_running(is_running).show(ui)
 }

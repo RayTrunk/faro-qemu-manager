@@ -73,5 +73,13 @@
   "light": "Light",
   "qemu_dir": "QEMU Binary Directory",
   "select_folder": "Select Folder...",
-  "close": "Close"
+  "close": "Close",
+  "add_cdrom": "Add CD/DVD ISO",
+  "action": "Action",
+  "delete_confirm_msg": "Are you sure you want to delete",
+  "auto_scroll": "Auto-scroll",
+  "copy_logs": "Copy Logs",
+  "lines_label": "lines",
+  "filter_placeholder": "Filter logs...",
+  "filter_label": "Filter"
 }

@@ -52,20 +52,12 @@ impl I18n {
 
     /// List of available locales as static code and display name pairs: `[("en", "English"), ("de", "Deutsch"), ("fr", "Français")]`
     pub fn locales() -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("en", "English"),
-            ("de", "Deutsch"),
-            ("fr", "Français"),
-        ]
+        vec![("en", "English"), ("de", "Deutsch"), ("fr", "Français")]
     }
 
     /// Available locales accessor matching interface requirements
     pub fn available_locales(&self) -> Vec<(&str, &str)> {
-        vec![
-            ("en", "English"),
-            ("de", "Deutsch"),
-            ("fr", "Français"),
-        ]
+        vec![("en", "English"), ("de", "Deutsch"), ("fr", "Français")]
     }
 
     /// Returns the currently active locale code
@@ -109,7 +101,11 @@ impl I18n {
     }
 
     /// Loads or merges an override catalog from a JSON string for a given locale
-    pub fn load_override_json(&mut self, locale: &str, json_content: &str) -> Result<(), serde_json::Error> {
+    pub fn load_override_json(
+        &mut self,
+        locale: &str,
+        json_content: &str,
+    ) -> Result<(), serde_json::Error> {
         let map: HashMap<String, String> = serde_json::from_str(json_content)?;
         self.catalogs
             .entry(locale.to_string())
@@ -119,7 +115,11 @@ impl I18n {
     }
 
     /// Loads or merges an override catalog from a file for a given locale
-    pub fn load_override_file<P: AsRef<Path>>(&mut self, locale: &str, path: P) -> std::io::Result<()> {
+    pub fn load_override_file<P: AsRef<Path>>(
+        &mut self,
+        locale: &str,
+        path: P,
+    ) -> std::io::Result<()> {
         let content = std::fs::read_to_string(path)?;
         if let Err(e) = self.load_override_json(locale, &content) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e));

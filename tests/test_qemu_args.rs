@@ -1,12 +1,10 @@
+use faro_qem::config::{
+    Accelerator, Arch, DisplayConfig, DriveConfig, DriveFormat, DriveInterface, PortForwardRule,
+    VmConfig,
+};
+use faro_qem::qemu::{build_qemu_args, create_disk_image, find_qemu_binary, find_qemu_img};
 use std::fs::File;
 use std::path::PathBuf;
-use faro_qem::config::{
-    Accelerator, Arch, DisplayConfig, DriveConfig, DriveFormat, DriveInterface,
-    PortForwardRule, VmConfig,
-};
-use faro_qem::qemu::{
-    build_qemu_args, create_disk_image, find_qemu_binary, find_qemu_img,
-};
 
 #[test]
 fn test_build_qemu_args_basic() {
@@ -143,4 +141,51 @@ fn test_create_disk_image_with_system_qemu_img_if_present() {
         assert!(res.is_ok(), "create_disk_image failed: {:?}", res.err());
         assert!(target.exists(), "Created disk image file does not exist");
     }
+}
+
+#[test]
+fn test_build_qemu_args_none_flags() {
+    let mut vm = VmConfig::new_default("Headless Isolated VM", Arch::X86_64);
+    vm.display.vga_type = "none".to_string();
+    vm.network.backend = "none".to_string();
+
+    let args = build_qemu_args(&vm);
+    let joined = args.join(" ");
+
+    assert!(
+        joined.contains("-vga none"),
+        "Args should contain '-vga none': {:?}",
+        joined
+    );
+    assert!(
+        joined.contains("-nic none"),
+        "Args should contain '-nic none': {:?}",
+        joined
+    );
+    assert!(
+        !joined.contains("-netdev"),
+        "Args should not configure -netdev when backend is none: {:?}",
+        joined
+    );
+}
+
+#[test]
+fn test_find_qemu_binary_file_candidate_name_filtering() {
+    let temp = tempfile::tempdir().expect("Failed to create tempdir");
+    let valid_name = if cfg!(windows) {
+        "qemu-system-x86_64.exe"
+    } else {
+        "qemu-system-x86_64"
+    };
+    let valid_file = temp.path().join(valid_name);
+    File::create(&valid_file).expect("create valid file");
+
+    let invalid_file = temp.path().join("not_qemu.txt");
+    File::create(&invalid_file).expect("create invalid file");
+
+    let found_valid = find_qemu_binary(Some(&valid_file), Arch::X86_64);
+    assert_eq!(found_valid, Some(valid_file));
+
+    let found_invalid = find_qemu_binary(Some(&invalid_file), Arch::X86_64);
+    assert_ne!(found_invalid, Some(invalid_file.clone()));
 }

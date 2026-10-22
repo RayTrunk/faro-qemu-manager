@@ -119,6 +119,14 @@ fn test_i18n_rich_catalog_keys_present_in_all_locales() {
         "qemu_dir",
         "select_folder",
         "close",
+        "add_cdrom",
+        "action",
+        "delete_confirm_msg",
+        "auto_scroll",
+        "copy_logs",
+        "lines_label",
+        "filter_placeholder",
+        "filter_label",
     ];
 
     for locale in ["en", "de", "fr"] {
@@ -133,7 +141,8 @@ fn test_i18n_rich_catalog_keys_present_in_all_locales() {
             assert!(
                 !translated.trim().is_empty(),
                 "Translation for key '{}' in locale '{}' is empty",
-                key, locale
+                key,
+                locale
             );
         }
     }
@@ -163,8 +172,11 @@ fn test_i18n_template_formatting_and_default() {
 fn test_i18n_override_file_and_dir() {
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let de_override_path = temp_dir.path().join("de.json");
-    std::fs::write(&de_override_path, r#"{"custom_test_key": "Benutzerdefiniert"}"#)
-        .expect("write test file");
+    std::fs::write(
+        &de_override_path,
+        r#"{"custom_test_key": "Benutzerdefiniert"}"#,
+    )
+    .expect("write test file");
 
     let mut i18n = I18n::new("de");
     i18n.load_overrides_from_dir(temp_dir.path());

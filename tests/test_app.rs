@@ -1,14 +1,12 @@
 // FARO QEM (C) R.Trunk 2026
 // Integration & End-to-End Application State Tests
 
-use std::sync::mpsc;
 use egui::Context;
+use std::sync::mpsc;
 use tempfile::tempdir;
 
 use faro_qem::app::FaroQemApp;
-use faro_qem::config::{
-    load_settings, load_vms, Accelerator, Arch,
-};
+use faro_qem::config::{load_settings, load_vms, Accelerator, Arch};
 use faro_qem::qemu::{spawn_qemu, QemuEvent};
 use faro_qem::ui::console::LogLevel;
 use faro_qem::ui::sidebar::{SidebarAction, VmStatus};
@@ -118,7 +116,8 @@ fn test_faro_qem_app_detail_actions_and_persistence() {
 #[test]
 fn test_faro_qem_app_process_qemu_events_lifecycle() {
     let dir = tempdir().unwrap();
-    let mut app = FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
+    let mut app =
+        FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
     let vm_id = app.vms[0].id;
 
     // Simulate process registration with a dummy channel
@@ -135,15 +134,20 @@ fn test_faro_qem_app_process_qemu_events_lifecycle() {
     tx.send(QemuEvent::Started(4242)).unwrap();
     app.process_qemu_events(None);
 
-    assert_eq!(app.status_map.get(&vm_id), Some(&VmStatus::Running { pid: 4242 }));
+    assert_eq!(
+        app.status_map.get(&vm_id),
+        Some(&VmStatus::Running { pid: 4242 })
+    );
     let logs = app.console_logs.get(&vm_id).unwrap();
     assert_eq!(logs.len(), 1);
     assert_eq!(logs.entries[0].level, LogLevel::System);
     assert!(logs.entries[0].text.contains("4242"));
 
     // 2. Stdout and Stderr events
-    tx.send(QemuEvent::Stdout("GRUB boot loader started".to_string())).unwrap();
-    tx.send(QemuEvent::Stderr("ACPI table warning".to_string())).unwrap();
+    tx.send(QemuEvent::Stdout("GRUB boot loader started".to_string()))
+        .unwrap();
+    tx.send(QemuEvent::Stderr("ACPI table warning".to_string()))
+        .unwrap();
     app.process_qemu_events(None);
 
     let logs = app.console_logs.get(&vm_id).unwrap();
@@ -170,7 +174,8 @@ fn test_faro_qem_app_process_qemu_events_lifecycle() {
 #[test]
 fn test_faro_qem_app_process_qemu_events_error_exit() {
     let dir = tempdir().unwrap();
-    let mut app = FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
+    let mut app =
+        FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
     let vm_id = app.vms[0].id;
 
     let (tx, rx) = mpsc::channel();
@@ -181,15 +186,23 @@ fn test_faro_qem_app_process_qemu_events_error_exit() {
     app.running_processes.insert(vm_id, (vm_proc, rx));
 
     // Send error followed by non-zero exit code
-    tx.send(QemuEvent::Error("Hardware acceleration unavailable".to_string())).unwrap();
+    tx.send(QemuEvent::Error(
+        "Hardware acceleration unavailable".to_string(),
+    ))
+    .unwrap();
     tx.send(QemuEvent::Exited(Some(1))).unwrap();
     app.process_qemu_events(None);
 
-    assert!(matches!(app.status_map.get(&vm_id), Some(VmStatus::Error(_))));
+    assert!(matches!(
+        app.status_map.get(&vm_id),
+        Some(VmStatus::Error(_))
+    ));
     let logs = app.console_logs.get(&vm_id).unwrap();
     assert_eq!(logs.len(), 2);
     assert_eq!(logs.entries[0].level, LogLevel::Error);
-    assert!(logs.entries[0].text.contains("Hardware acceleration unavailable"));
+    assert!(logs.entries[0]
+        .text
+        .contains("Hardware acceleration unavailable"));
     assert_eq!(logs.entries[1].level, LogLevel::Error);
     assert!(logs.entries[1].text.contains("non-zero exit code: 1"));
     assert!(!app.running_processes.contains_key(&vm_id));
@@ -198,7 +211,8 @@ fn test_faro_qem_app_process_qemu_events_error_exit() {
 #[test]
 fn test_faro_qem_app_launch_binary_not_found() {
     let dir = tempdir().unwrap();
-    let mut app = FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
+    let mut app =
+        FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
     let vm_id = app.vms[0].id;
 
     // Set custom QEMU directory to an empty temp dir where no binaries exist
@@ -211,7 +225,10 @@ fn test_faro_qem_app_launch_binary_not_found() {
     app.vms[0].arch = Arch::Riscv64;
     let res = app.launch_vm(vm_id, None);
     if res.is_err() {
-        assert!(matches!(app.status_map.get(&vm_id), Some(VmStatus::Error(_))));
+        assert!(matches!(
+            app.status_map.get(&vm_id),
+            Some(VmStatus::Error(_))
+        ));
         let logs = app.console_logs.get(&vm_id).unwrap();
         assert!(!logs.is_empty());
         assert_eq!(logs.entries[0].level, LogLevel::Error);
@@ -221,7 +238,8 @@ fn test_faro_qem_app_launch_binary_not_found() {
 #[test]
 fn test_faro_qem_app_stop_vm_cleans_up_process() {
     let dir = tempdir().unwrap();
-    let mut app = FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
+    let mut app =
+        FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
     let vm_id = app.vms[0].id;
 
     let (_tx, rx) = mpsc::channel();
@@ -230,7 +248,8 @@ fn test_faro_qem_app_stop_vm_cleans_up_process() {
     let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx).unwrap();
 
     app.running_processes.insert(vm_id, (vm_proc, rx));
-    app.status_map.insert(vm_id, VmStatus::Running { pid: 7777 });
+    app.status_map
+        .insert(vm_id, VmStatus::Running { pid: 7777 });
 
     let res = app.stop_vm(vm_id);
     assert!(res.is_ok());
@@ -241,7 +260,8 @@ fn test_faro_qem_app_stop_vm_cleans_up_process() {
 #[test]
 fn test_faro_qem_app_frame_rendering_all_tabs() {
     let dir = tempdir().unwrap();
-    let mut app = FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
+    let mut app =
+        FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
 
     let ctx = Context::default();
 
@@ -268,7 +288,8 @@ fn test_faro_qem_app_frame_rendering_all_tabs() {
 #[test]
 fn test_faro_qem_app_empty_state_rendering_and_recovery() {
     let dir = tempdir().unwrap();
-    let mut app = FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
+    let mut app =
+        FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
 
     // Delete all VMs
     app.vms.clear();

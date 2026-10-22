@@ -71,7 +71,10 @@ fn test_spawn_nonexistent_binary() {
     let bad_path = Path::new("faro_qem_non_existent_binary_xyz_12345.exe");
     let result = spawn_qemu(bad_path, &[], tx);
 
-    assert!(result.is_err(), "Spawning nonexistent binary should return Err");
+    assert!(
+        result.is_err(),
+        "Spawning nonexistent binary should return Err"
+    );
 
     // Also verify any channel event or error
     let events: Vec<_> = rx.try_iter().collect();
@@ -93,13 +96,18 @@ fn test_spawn_rustc_stdout_streaming_and_exit() {
 
     assert!(vm.pid() > 0, "PID should be greater than 0");
     let debug_str = format!("{:?}", vm);
-    assert!(debug_str.contains("VmProcess"), "Debug representation should include struct name");
+    assert!(
+        debug_str.contains("VmProcess"),
+        "Debug representation should include struct name"
+    );
 
     let events = drain_events_until_exit(&rx, Duration::from_secs(5));
 
     // Must have Started(pid)
     assert!(
-        events.iter().any(|e| matches!(e, QemuEvent::Started(pid) if *pid == vm.pid())),
+        events
+            .iter()
+            .any(|e| matches!(e, QemuEvent::Started(pid) if *pid == vm.pid())),
         "Should receive Started with matching PID. Events: {:?}",
         events
     );
@@ -116,7 +124,9 @@ fn test_spawn_rustc_stdout_streaming_and_exit() {
 
     // Must have Exited(Some(0))
     assert!(
-        events.iter().any(|e| matches!(e, QemuEvent::Exited(Some(0)))),
+        events
+            .iter()
+            .any(|e| matches!(e, QemuEvent::Exited(Some(0)))),
         "Should receive Exited(Some(0)). Events: {:?}",
         events
     );
@@ -152,7 +162,9 @@ fn test_spawn_rustc_stderr_streaming_and_non_zero_exit() {
 
     // Exit code should be non-zero
     assert!(
-        events.iter().any(|e| matches!(e, QemuEvent::Exited(Some(code)) if *code != 0)),
+        events
+            .iter()
+            .any(|e| matches!(e, QemuEvent::Exited(Some(code)) if *code != 0)),
         "Should receive Exited with non-zero code. Events: {:?}",
         events
     );
@@ -174,7 +186,10 @@ fn test_spawn_multiple_lines_stdout_and_stderr() {
                       print('OUT_3')\n\
                       sys.stderr.write('ERR_2\\n')\n\
                       sys.stderr.flush()\n";
-        (py, vec!["-u".to_string(), "-c".to_string(), script.to_string()])
+        (
+            py,
+            vec!["-u".to_string(), "-c".to_string(), script.to_string()],
+        )
     } else {
         #[cfg(windows)]
         {
@@ -182,7 +197,8 @@ fn test_spawn_multiple_lines_stdout_and_stderr() {
                 PathBuf::from("cmd.exe"),
                 vec![
                     "/c".to_string(),
-                    "echo OUT_1& echo OUT_2& echo ERR_1 1>&2& echo OUT_3& echo ERR_2 1>&2".to_string(),
+                    "echo OUT_1& echo OUT_2& echo ERR_1 1>&2& echo OUT_3& echo ERR_2 1>&2"
+                        .to_string(),
                 ],
             )
         }
@@ -192,7 +208,8 @@ fn test_spawn_multiple_lines_stdout_and_stderr() {
                 PathBuf::from("sh"),
                 vec![
                     "-c".to_string(),
-                    "echo OUT_1; echo OUT_2; echo ERR_1 >&2; echo OUT_3; echo ERR_2 >&2".to_string(),
+                    "echo OUT_1; echo OUT_2; echo ERR_1 >&2; echo OUT_3; echo ERR_2 >&2"
+                        .to_string(),
                 ],
             )
         }
@@ -246,7 +263,9 @@ fn test_spawn_multiple_lines_stdout_and_stderr() {
     );
 
     assert!(
-        events.iter().any(|e| matches!(e, QemuEvent::Exited(Some(0)))),
+        events
+            .iter()
+            .any(|e| matches!(e, QemuEvent::Exited(Some(0)))),
         "Should exit with 0. Events: {:?}",
         events
     );
@@ -264,7 +283,10 @@ fn test_vm_process_kill_terminates_running_process() {
                       sys.stdout.write('ONLINE_NOW\\n')\n\
                       sys.stdout.flush()\n\
                       time.sleep(30)\n";
-        (py, vec!["-u".to_string(), "-c".to_string(), script.to_string()])
+        (
+            py,
+            vec!["-u".to_string(), "-c".to_string(), script.to_string()],
+        )
     } else {
         #[cfg(windows)]
         {
@@ -280,10 +302,7 @@ fn test_vm_process_kill_terminates_running_process() {
         {
             (
                 PathBuf::from("sh"),
-                vec![
-                    "-c".to_string(),
-                    "echo ONLINE_NOW; sleep 30".to_string(),
-                ],
+                vec!["-c".to_string(), "echo ONLINE_NOW; sleep 30".to_string()],
             )
         }
     };
@@ -301,7 +320,10 @@ fn test_vm_process_kill_terminates_running_process() {
             }
         }
     }
-    assert!(saw_online, "Child process should output ONLINE_NOW before kill");
+    assert!(
+        saw_online,
+        "Child process should output ONLINE_NOW before kill"
+    );
 
     // Process should be alive right now
     assert!(vm.is_alive(), "Process should be alive before kill");
@@ -313,7 +335,9 @@ fn test_vm_process_kill_terminates_running_process() {
     // Wait for Exited event
     let exit_events = drain_events_until_exit(&rx, Duration::from_secs(5));
     assert!(
-        exit_events.iter().any(|e| matches!(e, QemuEvent::Exited(_))),
+        exit_events
+            .iter()
+            .any(|e| matches!(e, QemuEvent::Exited(_))),
         "Should receive Exited event after kill. Events: {:?}",
         exit_events
     );
@@ -363,12 +387,16 @@ fn test_spawn_with_arguments_preserves_spaces_and_quotes() {
         .collect();
 
     assert!(
-        stdout_lines.iter().any(|l| l.contains("ARG1:Hello World with Spaces")),
+        stdout_lines
+            .iter()
+            .any(|l| l.contains("ARG1:Hello World with Spaces")),
         "ARG1 should preserve spaces. Stdout: {:?}",
         stdout_lines
     );
     assert!(
-        stdout_lines.iter().any(|l| l.contains("ARG2:Quotes: \"and\" 'single'")),
+        stdout_lines
+            .iter()
+            .any(|l| l.contains("ARG2:Quotes: \"and\" 'single'")),
         "ARG2 should preserve quotes. Stdout: {:?}",
         stdout_lines
     );

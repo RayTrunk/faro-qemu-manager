@@ -1,10 +1,10 @@
-use std::path::PathBuf;
-use tempfile::tempdir;
 use faro_qem::config::{
     load_settings, load_vms, save_settings, save_vms, Accelerator, AppSettings, Arch,
     DisplayConfig, DriveConfig, DriveFormat, DriveInterface, NetworkConfig, PortForwardRule,
     VmConfig,
 };
+use std::path::PathBuf;
+use tempfile::tempdir;
 
 #[test]
 fn test_vm_config_default_and_roundtrip() {
@@ -142,14 +142,26 @@ fn test_save_and_load_settings_persistence() {
 
 #[test]
 fn test_arch_and_accelerator_variants() {
-    let arches = [Arch::X86_64, Arch::I386, Arch::Aarch64, Arch::Riscv64, Arch::Arm];
+    let arches = [
+        Arch::X86_64,
+        Arch::I386,
+        Arch::Aarch64,
+        Arch::Riscv64,
+        Arch::Arm,
+    ];
     for arch in &arches {
         let json = serde_json::to_string(arch).unwrap();
         let parsed: Arch = serde_json::from_str(&json).unwrap();
         assert_eq!(*arch, parsed);
     }
 
-    let accels = [Accelerator::Auto, Accelerator::WHPX, Accelerator::HAXM, Accelerator::KVM, Accelerator::TCG];
+    let accels = [
+        Accelerator::Auto,
+        Accelerator::WHPX,
+        Accelerator::HAXM,
+        Accelerator::KVM,
+        Accelerator::TCG,
+    ];
     for accel in &accels {
         let json = serde_json::to_string(accel).unwrap();
         let parsed: Accelerator = serde_json::from_str(&json).unwrap();

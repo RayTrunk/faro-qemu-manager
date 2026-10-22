@@ -45,7 +45,11 @@ fn test_configure_modern_fonts() {
     assert!(style.text_styles.contains_key(&egui::TextStyle::Small));
 
     assert_eq!(
-        style.text_styles.get(&egui::TextStyle::Heading).unwrap().size,
+        style
+            .text_styles
+            .get(&egui::TextStyle::Heading)
+            .unwrap()
+            .size,
         20.0
     );
     assert_eq!(
@@ -53,7 +57,11 @@ fn test_configure_modern_fonts() {
         14.0
     );
     assert_eq!(
-        style.text_styles.get(&egui::TextStyle::Button).unwrap().size,
+        style
+            .text_styles
+            .get(&egui::TextStyle::Button)
+            .unwrap()
+            .size,
         14.0
     );
     assert_eq!(
@@ -84,7 +92,10 @@ fn test_apply_theme_dark_and_light() {
     {
         let visuals = &ctx.style().visuals;
         assert!(visuals.dark_mode);
-        assert_eq!(visuals.window_rounding, egui::Rounding::same(ROUNDING_WINDOW));
+        assert_eq!(
+            visuals.window_rounding,
+            egui::Rounding::same(ROUNDING_WINDOW)
+        );
         assert_eq!(
             visuals.widgets.noninteractive.rounding,
             egui::Rounding::same(ROUNDING_BUTTON)
@@ -110,7 +121,10 @@ fn test_apply_theme_dark_and_light() {
     {
         let visuals = &ctx.style().visuals;
         assert!(!visuals.dark_mode);
-        assert_eq!(visuals.window_rounding, egui::Rounding::same(ROUNDING_WINDOW));
+        assert_eq!(
+            visuals.window_rounding,
+            egui::Rounding::same(ROUNDING_WINDOW)
+        );
         assert_eq!(
             visuals.widgets.noninteractive.rounding,
             egui::Rounding::same(ROUNDING_BUTTON)

@@ -120,9 +120,10 @@ pub fn configure_modern_fonts(ctx: &Context) {
 
     for path in proportional_candidates {
         if let Ok(data) = std::fs::read(path) {
-            fonts
-                .font_data
-                .insert("system_proportional".to_owned(), egui::FontData::from_owned(data));
+            fonts.font_data.insert(
+                "system_proportional".to_owned(),
+                egui::FontData::from_owned(data),
+            );
             if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
                 family.insert(0, "system_proportional".to_owned());
             }
@@ -176,7 +177,10 @@ pub fn configure_modern_fonts(ctx: &Context) {
                 TextStyle::Monospace,
                 FontId::new(13.0, FontFamily::Monospace),
             ),
-            (TextStyle::Small, FontId::new(11.0, FontFamily::Proportional)),
+            (
+                TextStyle::Small,
+                FontId::new(11.0, FontFamily::Proportional),
+            ),
         ]
         .into();
 
@@ -236,15 +240,13 @@ fn create_dark_visuals() -> Visuals {
     visuals.widgets.noninteractive.bg_fill = COLOR_DARK_SURFACE;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, COLOR_DARK_BORDER);
     visuals.widgets.noninteractive.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.noninteractive.fg_stroke =
-        Stroke::new(1.0, Color32::from_rgb(190, 195, 205));
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(190, 195, 205));
 
     // Inactive widgets (buttons, checkboxes at rest)
     visuals.widgets.inactive.bg_fill = Color32::from_rgb(38, 42, 51);
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(55, 60, 72));
     visuals.widgets.inactive.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.inactive.fg_stroke =
-        Stroke::new(1.0, Color32::from_rgb(225, 230, 238));
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(225, 230, 238));
 
     // Hovered widgets
     visuals.widgets.hovered.bg_fill = COLOR_DARK_SURFACE_HOVER;
@@ -299,15 +301,13 @@ fn create_light_visuals() -> Visuals {
     visuals.widgets.noninteractive.bg_fill = COLOR_LIGHT_SURFACE;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, COLOR_LIGHT_BORDER);
     visuals.widgets.noninteractive.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.noninteractive.fg_stroke =
-        Stroke::new(1.0, Color32::from_rgb(70, 75, 85));
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(70, 75, 85));
 
     // Inactive widgets
     visuals.widgets.inactive.bg_fill = Color32::from_rgb(238, 241, 246);
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(205, 210, 220));
     visuals.widgets.inactive.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.inactive.fg_stroke =
-        Stroke::new(1.0, Color32::from_rgb(35, 40, 48));
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(35, 40, 48));
 
     // Hovered widgets
     visuals.widgets.hovered.bg_fill = COLOR_LIGHT_SURFACE_HOVER;

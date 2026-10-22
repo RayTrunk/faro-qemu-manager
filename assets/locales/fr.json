@@ -73,5 +73,13 @@
   "light": "Clair",
   "qemu_dir": "Répertoire binaire QEMU",
   "select_folder": "Sélectionner un dossier...",
-  "close": "Fermer"
+  "close": "Fermer",
+  "add_cdrom": "Ajouter un ISO CD/DVD",
+  "action": "Action",
+  "delete_confirm_msg": "Êtes-vous sûr de vouloir supprimer",
+  "auto_scroll": "Défilement automatique",
+  "copy_logs": "Tout copier",
+  "lines_label": "lignes",
+  "filter_placeholder": "Filtrer...",
+  "filter_label": "Filtre"
 }

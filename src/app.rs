@@ -11,13 +11,13 @@ use crate::config::{
     AppSettings, VmConfig,
 };
 use crate::i18n::I18n;
-use crate::qemu::{build_qemu_args, find_qemu_binary, find_qemu_img, spawn_qemu, QemuEvent, VmProcess};
+use crate::qemu::{
+    build_qemu_args, find_qemu_binary, find_qemu_img, spawn_qemu, QemuEvent, VmProcess,
+};
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::settings::SettingsDialog;
 use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
-use crate::ui::theme::{
-    apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY,
-};
+use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
 use crate::ui::vm_detail::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
 
 /// FARO QEM central application state
@@ -60,7 +60,11 @@ impl FaroQemApp {
     }
 
     /// Initialize `FaroQemApp` with explicit file paths and optional egui Context
-    pub fn with_paths(settings_path: PathBuf, vms_path: PathBuf, ctx: Option<&egui::Context>) -> Self {
+    pub fn with_paths(
+        settings_path: PathBuf,
+        vms_path: PathBuf,
+        ctx: Option<&egui::Context>,
+    ) -> Self {
         let settings = load_settings(&settings_path);
         let mut vms = load_vms(&vms_path);
 
@@ -321,8 +325,10 @@ impl FaroQemApp {
             );
             ui.add_space(16.0);
             ui.label(
-                egui::RichText::new("Select a virtual machine from the sidebar or create a new one.")
-                    .color(ui.visuals().weak_text_color()),
+                egui::RichText::new(
+                    "Select a virtual machine from the sidebar or create a new one.",
+                )
+                .color(ui.visuals().weak_text_color()),
             );
             ui.add_space(20.0);
             let create_btn = egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
@@ -370,7 +376,11 @@ impl FaroQemApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(id) = self.selected_vm_id {
                 if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
-                    let is_running = self.status_map.get(&id).map(|s| s.is_running()).unwrap_or(false);
+                    let is_running = self
+                        .status_map
+                        .get(&id)
+                        .map(|s| s.is_running())
+                        .unwrap_or(false);
                     let pid = self.status_map.get(&id).and_then(|s| s.pid());
                     let cli_cmd = self.cli_previews.get(&id).map(|s| s.as_str());
                     let qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref());
@@ -412,11 +422,8 @@ impl FaroQemApp {
 
         // 4. Modal Settings Dialog
         if self.settings_open {
-            let mut dialog = SettingsDialog::new(
-                &mut self.settings_open,
-                &mut self.settings,
-                &mut self.i18n,
-            );
+            let mut dialog =
+                SettingsDialog::new(&mut self.settings_open, &mut self.settings, &mut self.i18n);
             if dialog.show(ctx) {
                 let _ = save_settings(&self.settings_path, &self.settings);
                 apply_theme(ctx, &self.settings.theme);

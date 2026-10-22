@@ -6,9 +6,8 @@ use faro_qem::config::{Arch, VmConfig};
 use faro_qem::i18n::I18n;
 use faro_qem::qemu::QemuEvent;
 use faro_qem::ui::{
-    current_timestamp, render_console, render_console_simple, strip_ansi_codes,
-    ConsoleAction, ConsoleLogBuffer, ConsoleView, CreateDiskState, DetailTab,
-    LogEntry, LogLevel, VmDetailView,
+    current_timestamp, render_console, render_console_simple, strip_ansi_codes, ConsoleAction,
+    ConsoleLogBuffer, ConsoleView, CreateDiskState, DetailTab, LogEntry, LogLevel, VmDetailView,
 };
 
 #[test]
@@ -223,15 +222,7 @@ fn test_console_view_with_logs_and_cli_preview() {
 
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let action = render_console(
-                ui,
-                &mut logs,
-                true,
-                Some(12345),
-                None,
-                Some(cmd),
-                &i18n,
-            );
+            let action = render_console(ui, &mut logs, true, Some(12345), None, Some(cmd), &i18n);
             assert_eq!(action, None);
         });
     });
@@ -239,15 +230,8 @@ fn test_console_view_with_logs_and_cli_preview() {
     // Verify exit code status rendering (code 0)
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let action = render_console(
-                ui,
-                &mut logs,
-                false,
-                None,
-                Some(Some(0)),
-                Some(cmd),
-                &i18n,
-            );
+            let action =
+                render_console(ui, &mut logs, false, None, Some(Some(0)), Some(cmd), &i18n);
             assert_eq!(action, None);
         });
     });
@@ -324,17 +308,11 @@ fn test_vm_detail_with_console_logs_integration() {
 
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let mut view = VmDetailView::new(
-                &mut vm,
-                true,
-                &i18n,
-                &mut active_tab,
-                None,
-                &mut disk_modal,
-            )
-            .with_console(&mut logs)
-            .with_pid(7712)
-            .with_cli_command(cli_cmd);
+            let mut view =
+                VmDetailView::new(&mut vm, true, &i18n, &mut active_tab, None, &mut disk_modal)
+                    .with_console(&mut logs)
+                    .with_pid(7712)
+                    .with_cli_command(cli_cmd);
 
             let action = view.show(ui);
             assert_eq!(action, None);

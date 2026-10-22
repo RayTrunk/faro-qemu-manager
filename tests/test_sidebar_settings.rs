@@ -1,16 +1,16 @@
 // FARO QEM (C) R.Trunk 2026
 // Unit tests for Sidebar and Settings Dialog components
 
+use egui::Context;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use egui::Context;
 use uuid::Uuid;
 
-use faro_qem::config::{Arch, AppSettings, VmConfig};
+use faro_qem::config::{AppSettings, Arch, VmConfig};
 use faro_qem::i18n::I18n;
 use faro_qem::ui::{
-    render_settings_dialog, render_sidebar, render_sidebar_simple,
-    SettingsDialog, SidebarAction, SidebarView, VmStatus,
+    render_settings_dialog, render_sidebar, render_sidebar_simple, SettingsDialog, SidebarAction,
+    SidebarView, VmStatus,
 };
 
 #[test]

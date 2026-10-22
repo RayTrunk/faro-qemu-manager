@@ -1,8 +1,8 @@
 // FARO QEM (C) R.Trunk 2026
 // VM Detail Tabs and Hardware Controls component
 
-use std::path::{Path, PathBuf};
 use egui::Stroke;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::config::{
@@ -12,9 +12,8 @@ use crate::i18n::I18n;
 use crate::qemu::{create_disk_image, find_qemu_img};
 use crate::ui::console::{ConsoleLogBuffer, ConsoleView};
 use crate::ui::theme::{
-    card_frame, danger_button, icons, section_header, status_badge,
-    COLOR_DARK_SURFACE_HOVER, COLOR_ERROR, COLOR_PRIMARY, COLOR_RUNNING, COLOR_STOPPED,
-    ROUNDING_BUTTON,
+    card_frame, danger_button, icons, section_header, status_badge, COLOR_DARK_SURFACE_HOVER,
+    COLOR_ERROR, COLOR_PRIMARY, COLOR_RUNNING, COLOR_STOPPED, ROUNDING_BUTTON,
 };
 
 /// Actions emitted by the VM detail view toolbar and tabs
@@ -162,7 +161,11 @@ impl<'a> VmDetailView<'a> {
         ui.horizontal_wrapped(|ui| {
             // VM Name text editor with icon
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(icons::VM).size(20.0).color(COLOR_PRIMARY));
+                ui.label(
+                    egui::RichText::new(icons::VM)
+                        .size(20.0)
+                        .color(COLOR_PRIMARY),
+                );
                 ui.add(
                     egui::TextEdit::singleline(&mut self.vm.name)
                         .font(egui::TextStyle::Heading)
@@ -186,22 +189,35 @@ impl<'a> VmDetailView<'a> {
             // Right-aligned action buttons
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // [💾 Save] button
-                let save_btn = egui::Button::new(format!("{} {}", icons::SAVE, self.i18n.t("save")))
-                    .fill(COLOR_PRIMARY);
+                let save_btn =
+                    egui::Button::new(format!("{} {}", icons::SAVE, self.i18n.t("save")))
+                        .fill(COLOR_PRIMARY);
                 if ui.add(save_btn).clicked() {
                     action = Some(VmDetailAction::Save(self.vm.id));
                 }
 
                 // [⏹ Force Stop] button
-                let stop_btn = egui::Button::new(format!("{} {}", icons::STOP, self.i18n.t("stop")))
-                    .fill(if self.is_running { COLOR_ERROR } else { COLOR_STOPPED });
+                let stop_btn =
+                    egui::Button::new(format!("{} {}", icons::STOP, self.i18n.t("stop"))).fill(
+                        if self.is_running {
+                            COLOR_ERROR
+                        } else {
+                            COLOR_STOPPED
+                        },
+                    );
                 if ui.add_enabled(self.is_running, stop_btn).clicked() {
                     action = Some(VmDetailAction::Stop(self.vm.id));
                 }
 
                 // [▶ Launch VM] button
-                let launch_btn = egui::Button::new(format!("{} {}", icons::PLAY, self.i18n.t("launch")))
-                    .fill(if !self.is_running { COLOR_RUNNING } else { COLOR_STOPPED });
+                let launch_btn =
+                    egui::Button::new(format!("{} {}", icons::PLAY, self.i18n.t("launch"))).fill(
+                        if !self.is_running {
+                            COLOR_RUNNING
+                        } else {
+                            COLOR_STOPPED
+                        },
+                    );
                 if ui.add_enabled(!self.is_running, launch_btn).clicked() {
                     action = Some(VmDetailAction::Launch(self.vm.id));
                 }
@@ -216,8 +232,16 @@ impl<'a> VmDetailView<'a> {
                 (DetailTab::System, icons::CPU, self.i18n.t("tab_system")),
                 (DetailTab::Storage, icons::DISK, self.i18n.t("tab_storage")),
                 (DetailTab::Display, icons::VM, self.i18n.t("tab_display")),
-                (DetailTab::Network, icons::NETWORK, self.i18n.t("tab_network")),
-                (DetailTab::Console, icons::CONSOLE, self.i18n.t("tab_console")),
+                (
+                    DetailTab::Network,
+                    icons::NETWORK,
+                    self.i18n.t("tab_network"),
+                ),
+                (
+                    DetailTab::Console,
+                    icons::CONSOLE,
+                    self.i18n.t("tab_console"),
+                ),
             ];
 
             for (tab, icon, title) in tab_items {
@@ -240,14 +264,12 @@ impl<'a> VmDetailView<'a> {
         // 3. Active Tab Content
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| {
-                match *self.active_tab {
-                    DetailTab::System => self.show_system_tab(ui),
-                    DetailTab::Storage => self.show_storage_tab(ui),
-                    DetailTab::Display => self.show_display_tab(ui),
-                    DetailTab::Network => self.show_network_tab(ui),
-                    DetailTab::Console => self.show_console_tab(ui),
-                }
+            .show(ui, |ui| match *self.active_tab {
+                DetailTab::System => self.show_system_tab(ui),
+                DetailTab::Storage => self.show_storage_tab(ui),
+                DetailTab::Display => self.show_display_tab(ui),
+                DetailTab::Network => self.show_network_tab(ui),
+                DetailTab::Console => self.show_console_tab(ui),
             });
 
         // 4. Modal Dialog: Create New Disk Image
@@ -277,10 +299,14 @@ impl<'a> VmDetailView<'a> {
                             }
                         });
                     if self.vm.arch != old_arch {
-                        if self.vm.machine_type.is_empty() || self.vm.machine_type == old_arch.default_machine() {
+                        if self.vm.machine_type.is_empty()
+                            || self.vm.machine_type == old_arch.default_machine()
+                        {
                             self.vm.machine_type = self.vm.arch.default_machine().to_string();
                         }
-                        if self.vm.cpu_model.is_empty() || self.vm.cpu_model == old_arch.default_cpu() {
+                        if self.vm.cpu_model.is_empty()
+                            || self.vm.cpu_model == old_arch.default_cpu()
+                        {
                             self.vm.cpu_model = self.vm.arch.default_cpu().to_string();
                         }
                     }
@@ -314,7 +340,11 @@ impl<'a> VmDetailView<'a> {
                             .selected_text(self.vm.accel.as_str().to_uppercase())
                             .show_ui(ui, |ui| {
                                 for acc in Accelerator::all() {
-                                    ui.selectable_value(&mut self.vm.accel, *acc, acc.as_str().to_uppercase());
+                                    ui.selectable_value(
+                                        &mut self.vm.accel,
+                                        *acc,
+                                        acc.as_str().to_uppercase(),
+                                    );
                                 }
                             });
                         let hint = match self.vm.accel {
@@ -332,7 +362,11 @@ impl<'a> VmDetailView<'a> {
                             Accelerator::KVM => "(Kernel-based Virtual Machine)",
                             Accelerator::TCG => "(Tiny Code Generator software emulation)",
                         };
-                        ui.label(egui::RichText::new(hint).size(11.0).color(ui.visuals().weak_text_color()));
+                        ui.label(
+                            egui::RichText::new(hint)
+                                .size(11.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
                     });
                     ui.end_row();
 
@@ -419,7 +453,8 @@ impl<'a> VmDetailView<'a> {
 
                         let has_path = self.vm.bios_uefi.is_some();
                         let clear_btn_width = if has_path { 24.0 } else { 0.0 };
-                        let desired_width = (ui.available_width() - 110.0 - clear_btn_width).max(120.0);
+                        let desired_width =
+                            (ui.available_width() - 110.0 - clear_btn_width).max(120.0);
 
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut path_str)
@@ -435,7 +470,10 @@ impl<'a> VmDetailView<'a> {
                             };
                         }
 
-                        if ui.button(format!("{} {}", icons::FOLDER, self.i18n.t("browse"))).clicked() {
+                        if ui
+                            .button(format!("{} {}", icons::FOLDER, self.i18n.t("browse")))
+                            .clicked()
+                        {
                             let mut dialog = rfd::FileDialog::new()
                                 .add_filter("Firmware Images", &["fd", "bin", "rom", "raw"]);
                             if let Some(ref cur) = self.vm.bios_uefi {
@@ -448,7 +486,12 @@ impl<'a> VmDetailView<'a> {
                             }
                         }
 
-                        if has_path && ui.small_button(icons::CLOSE).on_hover_text(self.i18n.t("clear")).clicked() {
+                        if has_path
+                            && ui
+                                .small_button(icons::CLOSE)
+                                .on_hover_text(self.i18n.t("clear"))
+                                .clicked()
+                        {
                             self.vm.bios_uefi = None;
                         }
                     });
@@ -585,7 +628,7 @@ impl<'a> VmDetailView<'a> {
             ui.horizontal(|ui| {
                 ui.heading(self.i18n.t("cdroms"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(format!("{} {}", icons::ADD, "Add CD/DVD ISO")).clicked() {
+                    if ui.button(format!("{} {}", icons::ADD, self.i18n.t("add_cdrom"))).clicked() {
                         let dialog = rfd::FileDialog::new()
                             .add_filter("ISO Images", &["iso", "img"]);
                         if let Some(file) = dialog.pick_file() {
@@ -668,7 +711,11 @@ impl<'a> VmDetailView<'a> {
                             .selected_text(&self.vm.display.vga_type)
                             .show_ui(ui, |ui| {
                                 for opt in &vga_options {
-                                    ui.selectable_value(&mut self.vm.display.vga_type, opt.to_string(), *opt);
+                                    ui.selectable_value(
+                                        &mut self.vm.display.vga_type,
+                                        opt.to_string(),
+                                        *opt,
+                                    );
                                 }
                             });
                         let hint = match self.vm.display.vga_type.as_str() {
@@ -679,7 +726,11 @@ impl<'a> VmDetailView<'a> {
                             "none" => "(Headless / No graphic card)",
                             _ => "",
                         };
-                        ui.label(egui::RichText::new(hint).size(11.0).color(ui.visuals().weak_text_color()));
+                        ui.label(
+                            egui::RichText::new(hint)
+                                .size(11.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
                     });
                     ui.end_row();
 
@@ -691,7 +742,11 @@ impl<'a> VmDetailView<'a> {
                             .selected_text(&self.vm.display.display_backend)
                             .show_ui(ui, |ui| {
                                 for opt in &backend_options {
-                                    ui.selectable_value(&mut self.vm.display.display_backend, opt.to_string(), *opt);
+                                    ui.selectable_value(
+                                        &mut self.vm.display.display_backend,
+                                        opt.to_string(),
+                                        *opt,
+                                    );
                                 }
                             });
                         let hint = match self.vm.display.display_backend.as_str() {
@@ -701,13 +756,20 @@ impl<'a> VmDetailView<'a> {
                             "none" => "(Headless mode without window)",
                             _ => "",
                         };
-                        ui.label(egui::RichText::new(hint).size(11.0).color(ui.visuals().weak_text_color()));
+                        ui.label(
+                            egui::RichText::new(hint)
+                                .size(11.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
                     });
                     ui.end_row();
 
                     // Fullscreen
                     ui.label(egui::RichText::new(self.i18n.t("fullscreen")).strong());
-                    ui.checkbox(&mut self.vm.display.fullscreen, "Start VM window in fullscreen mode");
+                    ui.checkbox(
+                        &mut self.vm.display.fullscreen,
+                        "Start VM window in fullscreen mode",
+                    );
                     ui.end_row();
                 });
         });
@@ -732,7 +794,11 @@ impl<'a> VmDetailView<'a> {
                             .selected_text(&self.vm.network.backend)
                             .show_ui(ui, |ui| {
                                 for opt in &net_backends {
-                                    ui.selectable_value(&mut self.vm.network.backend, opt.to_string(), *opt);
+                                    ui.selectable_value(
+                                        &mut self.vm.network.backend,
+                                        opt.to_string(),
+                                        *opt,
+                                    );
                                 }
                             });
                         let hint = match self.vm.network.backend.as_str() {
@@ -742,19 +808,28 @@ impl<'a> VmDetailView<'a> {
                             "none" => "(No network connectivity)",
                             _ => "",
                         };
-                        ui.label(egui::RichText::new(hint).size(11.0).color(ui.visuals().weak_text_color()));
+                        ui.label(
+                            egui::RichText::new(hint)
+                                .size(11.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
                     });
                     ui.end_row();
 
                     // NIC model
                     ui.label(egui::RichText::new(self.i18n.t("nic_model")).strong());
                     ui.horizontal(|ui| {
-                        let nic_options = ["virtio-net-pci", "e1000", "rtl8139", "e1000e", "vmxnet3"];
+                        let nic_options =
+                            ["virtio-net-pci", "e1000", "rtl8139", "e1000e", "vmxnet3"];
                         egui::ComboBox::from_id_salt("detail_nic_model_combo")
                             .selected_text(&self.vm.network.nic_model)
                             .show_ui(ui, |ui| {
                                 for opt in &nic_options {
-                                    ui.selectable_value(&mut self.vm.network.nic_model, opt.to_string(), *opt);
+                                    ui.selectable_value(
+                                        &mut self.vm.network.nic_model,
+                                        opt.to_string(),
+                                        *opt,
+                                    );
                                 }
                             });
                         let hint = match self.vm.network.nic_model.as_str() {
@@ -763,7 +838,11 @@ impl<'a> VmDetailView<'a> {
                             "rtl8139" => "(Realtek 8139 Fast Ethernet)",
                             _ => "",
                         };
-                        ui.label(egui::RichText::new(hint).size(11.0).color(ui.visuals().weak_text_color()));
+                        ui.label(
+                            egui::RichText::new(hint)
+                                .size(11.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
                     });
                     ui.end_row();
                 });
@@ -806,7 +885,7 @@ impl<'a> VmDetailView<'a> {
                         ui.label("->");
                         ui.label(egui::RichText::new(self.i18n.t("guest_port")).strong());
                         ui.label(egui::RichText::new(self.i18n.t("proto")).strong());
-                        ui.label(egui::RichText::new("Action").strong());
+                        ui.label(egui::RichText::new(self.i18n.t("action")).strong());
                         ui.end_row();
 
                         for (idx, rule) in self.vm.network.port_forwards.iter_mut().enumerate() {
@@ -1096,5 +1175,13 @@ pub fn render_vm_detail(
     qemu_img_binary: Option<&Path>,
     disk_modal: &mut CreateDiskState,
 ) -> Option<VmDetailAction> {
-    VmDetailView::new(vm, is_running, i18n, active_tab, qemu_img_binary, disk_modal).show(ui)
+    VmDetailView::new(
+        vm,
+        is_running,
+        i18n,
+        active_tab,
+        qemu_img_binary,
+        disk_modal,
+    )
+    .show(ui)
 }

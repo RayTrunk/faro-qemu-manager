@@ -1,15 +1,13 @@
 // FARO QEM (C) R.Trunk 2026
 // Settings dialog component
 
-use std::path::PathBuf;
 use egui::Context;
+use std::path::PathBuf;
 
-use crate::config::{Arch, AppSettings};
+use crate::config::{AppSettings, Arch};
 use crate::i18n::I18n;
 use crate::qemu::find_qemu_binary;
-use crate::ui::theme::{
-    apply_theme, icons, section_header, COLOR_RUNNING, COLOR_WARNING,
-};
+use crate::ui::theme::{apply_theme, icons, section_header, COLOR_RUNNING, COLOR_WARNING};
 
 /// Modal dialog for application settings
 pub struct SettingsDialog<'a> {
@@ -96,8 +94,16 @@ impl<'a> SettingsDialog<'a> {
                     egui::ComboBox::from_id_salt("settings_theme_combo")
                         .selected_text(theme_display)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut selected_theme, "dark".to_string(), self.i18n.t("dark"));
-                            ui.selectable_value(&mut selected_theme, "light".to_string(), self.i18n.t("light"));
+                            ui.selectable_value(
+                                &mut selected_theme,
+                                "dark".to_string(),
+                                self.i18n.t("dark"),
+                            );
+                            ui.selectable_value(
+                                &mut selected_theme,
+                                "light".to_string(),
+                                self.i18n.t("light"),
+                            );
                         });
 
                     if selected_theme != current_theme {
@@ -162,7 +168,10 @@ impl<'a> SettingsDialog<'a> {
                     modified = true;
                 }
 
-                if ui.button(format!("{} {}", icons::FOLDER, self.i18n.t("browse"))).clicked() {
+                if ui
+                    .button(format!("{} {}", icons::FOLDER, self.i18n.t("browse")))
+                    .clicked()
+                {
                     let mut dialog = rfd::FileDialog::new();
                     if let Some(cur) = &self.settings.qemu_dir {
                         dialog = dialog.set_directory(cur);
@@ -173,7 +182,12 @@ impl<'a> SettingsDialog<'a> {
                     }
                 }
 
-                if has_path && ui.small_button(icons::CLOSE).on_hover_text(self.i18n.t("clear")).clicked() {
+                if has_path
+                    && ui
+                        .small_button(icons::CLOSE)
+                        .on_hover_text(self.i18n.t("clear"))
+                        .clicked()
+                {
                     self.settings.qemu_dir = None;
                     modified = true;
                 }
@@ -182,25 +196,28 @@ impl<'a> SettingsDialog<'a> {
             ui.add_space(6.0);
 
             // Status indicator: check if find_qemu_binary finds a binary
-            let detected = find_qemu_binary(self.settings.qemu_dir.as_deref(), Arch::X86_64);
-            ui.horizontal(|ui| {
-                match detected {
-                    Some(ref bin_path) => {
-                        ui.label(egui::RichText::new(icons::CHECK).color(COLOR_RUNNING));
-                        ui.label(
-                            egui::RichText::new(format!("QEMU binary found: {}", bin_path.display()))
-                                .size(12.0)
-                                .color(COLOR_RUNNING),
-                        );
-                    }
-                    None => {
-                        ui.label(egui::RichText::new(icons::WARNING).color(COLOR_WARNING));
-                        ui.label(
-                            egui::RichText::new("No QEMU binary found in selected directory or system PATH")
-                                .size(12.0)
-                                .color(COLOR_WARNING),
-                        );
-                    }
+            let detected = find_qemu_binary(
+                self.settings.qemu_dir.as_deref(),
+                self.settings.default_arch,
+            );
+            ui.horizontal(|ui| match detected {
+                Some(ref bin_path) => {
+                    ui.label(egui::RichText::new(icons::CHECK).color(COLOR_RUNNING));
+                    ui.label(
+                        egui::RichText::new(format!("QEMU binary found: {}", bin_path.display()))
+                            .size(12.0)
+                            .color(COLOR_RUNNING),
+                    );
+                }
+                None => {
+                    ui.label(egui::RichText::new(icons::WARNING).color(COLOR_WARNING));
+                    ui.label(
+                        egui::RichText::new(
+                            "No QEMU binary found in selected directory or system PATH",
+                        )
+                        .size(12.0)
+                        .color(COLOR_WARNING),
+                    );
                 }
             });
 

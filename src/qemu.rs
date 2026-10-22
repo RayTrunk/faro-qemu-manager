@@ -1,3 +1,4 @@
+use crate::config::{Accelerator, Arch, DriveFormat, VmConfig};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -5,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use crate::config::{Accelerator, Arch, DriveFormat, VmConfig};
 
 /// Resolve the accelerator string passed to QEMU.
 /// If `Accelerator::Auto`, picks WHPX on Windows, KVM on Linux, and TCG as fallback.
@@ -33,14 +33,16 @@ pub fn resolve_accelerator(accel: Accelerator) -> &'static str {
 }
 
 /// Helper to search for candidate binary names in custom directory, PATH, and standard directories.
-fn search_binary_candidates(custom_dir: Option<&Path>, candidate_names: &[String]) -> Option<PathBuf> {
+fn search_binary_candidates(
+    custom_dir: Option<&Path>,
+    candidate_names: &[String],
+) -> Option<PathBuf> {
     // 1. Check custom directory
     if let Some(dir) = custom_dir {
         if dir.is_file() {
             if candidate_names
                 .iter()
                 .any(|c| dir.file_name().is_some_and(|f| f == c.as_str()))
-                || dir.exists()
             {
                 return Some(dir.to_path_buf());
             }
@@ -215,7 +217,10 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
 
     // 7. Display and VGA
     let vga_type = vm.display.vga_type.trim();
-    if !vga_type.is_empty() && !vga_type.eq_ignore_ascii_case("none") {
+    if vga_type.eq_ignore_ascii_case("none") {
+        args.push("-vga".to_string());
+        args.push("none".to_string());
+    } else if !vga_type.is_empty() {
         let vga = if vga_type.eq_ignore_ascii_case("virtio-vga") {
             "virtio"
         } else {
@@ -242,7 +247,10 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
         vm.network.backend.trim()
     };
 
-    if !backend.eq_ignore_ascii_case("none") {
+    if backend.eq_ignore_ascii_case("none") {
+        args.push("-nic".to_string());
+        args.push("none".to_string());
+    } else {
         let mut netdev = format!("{},id=net0", backend);
         for rule in &vm.network.port_forwards {
             netdev.push_str(&format!(
@@ -296,7 +304,13 @@ pub fn create_disk_image(
         .arg(path)
         .arg(format!("{}G", size_gb))
         .output()
-        .map_err(|e| format!("Failed to execute qemu-img at '{}': {}", qemu_img.display(), e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to execute qemu-img at '{}': {}",
+                qemu_img.display(),
+                e
+            )
+        })?;
 
     if output.status.success() {
         Ok(())
@@ -441,7 +455,8 @@ pub fn spawn_qemu(
                             }
                         }
                         Err(e) => {
-                            let _ = tx_stdout.send(QemuEvent::Error(format!("Stdout read error: {}", e)));
+                            let _ = tx_stdout
+                                .send(QemuEvent::Error(format!("Stdout read error: {}", e)));
                             break;
                         }
                     }
@@ -470,7 +485,8 @@ pub fn spawn_qemu(
                             }
                         }
                         Err(e) => {
-                            let _ = tx_stderr.send(QemuEvent::Error(format!("Stderr read error: {}", e)));
+                            let _ = tx_stderr
+                                .send(QemuEvent::Error(format!("Stderr read error: {}", e)));
                             break;
                         }
                     }
@@ -569,5 +585,3 @@ pub fn spawn_qemu(
         alive,
     })
 }
-
-

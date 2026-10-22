@@ -1,17 +1,15 @@
 // FARO QEM (C) R.Trunk 2026
 // Unit tests for VM Detail Tabs and Hardware Controls component
 
-use std::path::PathBuf;
 use egui::Context;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use faro_qem::config::{
     Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, PortForwardRule, VmConfig,
 };
 use faro_qem::i18n::I18n;
-use faro_qem::ui::{
-    render_vm_detail, CreateDiskState, DetailTab, VmDetailAction, VmDetailView,
-};
+use faro_qem::ui::{render_vm_detail, CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
 
 #[test]
 fn test_vm_detail_action_variants_and_helpers() {
@@ -253,14 +251,8 @@ fn test_vm_detail_console_tab_rendering() {
     // 2. VM running console rendering
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let mut view = VmDetailView::new(
-                &mut vm,
-                true,
-                &i18n,
-                &mut active_tab,
-                None,
-                &mut disk_modal,
-            );
+            let mut view =
+                VmDetailView::new(&mut vm, true, &i18n, &mut active_tab, None, &mut disk_modal);
             let action = view.show(ui);
             assert_eq!(action, None);
         });
