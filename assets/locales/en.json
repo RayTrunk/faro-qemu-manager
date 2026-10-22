@@ -81,5 +81,12 @@
   "copy_logs": "Copy Logs",
   "lines_label": "lines",
   "filter_placeholder": "Filter logs...",
-  "filter_label": "Filter"
+  "filter_label": "Filter",
+  "menu_file": "File",
+  "menu_vm": "Virtual Machine",
+  "menu_settings": "Settings",
+  "menu_help": "Help",
+  "open_settings": "Preferences & Settings...",
+  "about": "About FARO QEM",
+  "exit": "Exit"
 }

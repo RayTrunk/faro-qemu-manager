@@ -32,6 +32,36 @@ fn test_vm_status_helpers_and_display() {
 }
 
 #[test]
+fn test_sidebar_layout_geometry() {
+    let ctx = Context::default();
+    let i18n = I18n::new("en");
+    let vm = VmConfig::new_default("Debian 12", Arch::X86_64);
+    let vms = vec![vm.clone()];
+    let statuses = HashMap::new();
+    let mut search = String::new();
+
+    let raw_input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1120.0, 720.0),
+        )),
+        ..Default::default()
+    };
+
+    let _ = ctx.run(raw_input, |ctx| {
+        egui::SidePanel::left("sidebar_panel")
+            .resizable(true)
+            .default_width(280.0)
+            .show(ctx, |ui| {
+                let view = SidebarView::new(&vms, Some(vm.id), &mut search, &statuses, &i18n);
+                let _ = view.show(ui);
+                // Confirm the sidebar does not overflow below window height (720.0)
+                assert!(ui.min_rect().bottom() <= 720.0);
+            });
+    });
+}
+
+#[test]
 fn test_sidebar_empty_list_rendering() {
     let ctx = Context::default();
     let i18n = I18n::new("en");

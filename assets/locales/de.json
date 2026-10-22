@@ -81,5 +81,12 @@
   "copy_logs": "Alle kopieren",
   "lines_label": "Zeilen",
   "filter_placeholder": "Filter...",
-  "filter_label": "Filter"
+  "filter_label": "Filter",
+  "menu_file": "Datei",
+  "menu_vm": "Virtuelle Maschine",
+  "menu_settings": "Einstellungen",
+  "menu_help": "Hilfe",
+  "open_settings": "Einstellungen öffnen...",
+  "about": "Über FARO QEM",
+  "exit": "Beenden"
 }

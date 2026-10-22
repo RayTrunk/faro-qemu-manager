@@ -117,6 +117,14 @@ fn test_i18n_rich_catalog_keys_present_in_all_locales() {
         "lines_label",
         "filter_placeholder",
         "filter_label",
+        // Menu bar items
+        "menu_file",
+        "menu_vm",
+        "menu_settings",
+        "menu_help",
+        "open_settings",
+        "about",
+        "exit",
     ];
 
     for locale in ["en", "de", "fr"] {

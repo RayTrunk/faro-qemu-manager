@@ -30,6 +30,7 @@ pub struct FaroQemApp {
     pub i18n: I18n,
     pub search_query: String,
     pub settings_open: bool,
+    pub about_open: bool,
     pub active_tab: DetailTab,
     pub create_disk_modal: CreateDiskState,
     pub console_logs: HashMap<Uuid, ConsoleLogBuffer>,
@@ -102,6 +103,7 @@ impl FaroQemApp {
             i18n,
             search_query: String::new(),
             settings_open: false,
+            about_open: false,
             active_tab: DetailTab::System,
             create_disk_modal: CreateDiskState::default(),
             console_logs: HashMap::new(),
@@ -357,7 +359,207 @@ impl FaroQemApp {
         // 1. Process asynchronous QEMU events
         self.process_qemu_events(Some(ctx));
 
-        // 2. Sidebar Navigation Panel
+        let mut menu_sidebar_action: Option<SidebarAction> = None;
+        let mut menu_detail_action: Option<VmDetailAction> = None;
+        let mut new_theme_to_set: Option<&'static str> = None;
+        let mut new_locale_to_set: Option<&'static str> = None;
+
+        // 2. Top Menu Bar (Global application commands & Settings menu)
+        egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                // File Menu
+                ui.menu_button(self.i18n.t("menu_file"), |ui| {
+                    if ui
+                        .button(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
+                        .clicked()
+                    {
+                        menu_sidebar_action = Some(SidebarAction::NewVm);
+                        ui.close_menu();
+                    }
+                    let can_dup = self.selected_vm_id.is_some();
+                    if ui
+                        .add_enabled(
+                            can_dup,
+                            egui::Button::new(format!(
+                                "{} {}",
+                                icons::EDIT,
+                                self.i18n.t("duplicate")
+                            )),
+                        )
+                        .clicked()
+                    {
+                        if let Some(id) = self.selected_vm_id {
+                            menu_sidebar_action = Some(SidebarAction::DuplicateVm(id));
+                        }
+                        ui.close_menu();
+                    }
+                    let can_del = self.selected_vm_id.is_some();
+                    if ui
+                        .add_enabled(
+                            can_del,
+                            egui::Button::new(format!(
+                                "{} {}",
+                                icons::DELETE,
+                                self.i18n.t("delete")
+                            )),
+                        )
+                        .clicked()
+                    {
+                        if let Some(id) = self.selected_vm_id {
+                            self.confirming_delete_id = Some(id);
+                        }
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui
+                        .button(format!("{} {}", icons::SETTINGS, self.i18n.t("settings")))
+                        .clicked()
+                    {
+                        self.settings_open = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui
+                        .button(format!("{} {}", icons::CLOSE, self.i18n.t("exit")))
+                        .clicked()
+                    {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        ui.close_menu();
+                    }
+                });
+
+                // Virtual Machine Menu
+                ui.menu_button(self.i18n.t("menu_vm"), |ui| {
+                    let has_vm = self.selected_vm_id.is_some();
+                    let is_running = self
+                        .selected_vm_id
+                        .and_then(|id| self.status_map.get(&id))
+                        .map(|s| s.is_running())
+                        .unwrap_or(false);
+
+                    if ui
+                        .add_enabled(
+                            has_vm && !is_running,
+                            egui::Button::new(format!("{} {}", icons::PLAY, self.i18n.t("launch"))),
+                        )
+                        .clicked()
+                    {
+                        if let Some(id) = self.selected_vm_id {
+                            menu_detail_action = Some(VmDetailAction::Launch(id));
+                        }
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(
+                            has_vm && is_running,
+                            egui::Button::new(format!("{} {}", icons::STOP, self.i18n.t("stop"))),
+                        )
+                        .clicked()
+                    {
+                        if let Some(id) = self.selected_vm_id {
+                            menu_detail_action = Some(VmDetailAction::Stop(id));
+                        }
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(
+                            has_vm,
+                            egui::Button::new(format!("{} {}", icons::SAVE, self.i18n.t("save"))),
+                        )
+                        .clicked()
+                    {
+                        if let Some(id) = self.selected_vm_id {
+                            menu_detail_action = Some(VmDetailAction::Save(id));
+                        }
+                        ui.close_menu();
+                    }
+                });
+
+                // Settings Menu (Prominent top menu item)
+                ui.menu_button(self.i18n.t("menu_settings"), |ui| {
+                    if ui
+                        .button(format!(
+                            "{} {}",
+                            icons::SETTINGS,
+                            self.i18n.t("open_settings")
+                        ))
+                        .clicked()
+                    {
+                        self.settings_open = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new(self.i18n.t("theme")).weak().size(11.0));
+                    let dark_active = self.settings.theme.eq_ignore_ascii_case("dark");
+                    if ui
+                        .selectable_label(dark_active, self.i18n.t("dark"))
+                        .clicked()
+                    {
+                        new_theme_to_set = Some("dark");
+                        ui.close_menu();
+                    }
+                    let light_active = self.settings.theme.eq_ignore_ascii_case("light");
+                    if ui
+                        .selectable_label(light_active, self.i18n.t("light"))
+                        .clicked()
+                    {
+                        new_theme_to_set = Some("light");
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(self.i18n.t("language"))
+                            .weak()
+                            .size(11.0),
+                    );
+                    for (code, name) in self.i18n.available_locales() {
+                        let is_curr = self.settings.language == code;
+                        if ui.selectable_label(is_curr, name).clicked() {
+                            new_locale_to_set = Some(code);
+                            ui.close_menu();
+                        }
+                    }
+                });
+
+                // Help Menu
+                ui.menu_button(self.i18n.t("menu_help"), |ui| {
+                    if ui.button(self.i18n.t("about")).clicked() {
+                        self.about_open = true;
+                        ui.close_menu();
+                    }
+                });
+
+                // Right-aligned quick-access Settings button
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button(format!("{} {}", icons::SETTINGS, self.i18n.t("settings")))
+                        .clicked()
+                    {
+                        self.settings_open = true;
+                    }
+                });
+            });
+        });
+
+        if let Some(theme) = new_theme_to_set {
+            self.settings.theme = theme.to_string();
+            apply_theme(ctx, theme);
+            let _ = save_settings(&self.settings_path, &self.settings);
+        }
+        if let Some(locale) = new_locale_to_set {
+            self.settings.language = locale.to_string();
+            self.i18n.set_locale(locale);
+            let _ = save_settings(&self.settings_path, &self.settings);
+        }
+
+        if let Some(action) = menu_sidebar_action {
+            self.handle_sidebar_action(action, Some(ctx));
+        }
+        if let Some(action) = menu_detail_action {
+            self.handle_vm_detail_action(action, Some(ctx));
+        }
+
+        // 3. Sidebar Navigation Panel
         let mut sidebar_action = None;
         egui::SidePanel::left("sidebar_panel")
             .resizable(true)
@@ -381,7 +583,7 @@ impl FaroQemApp {
             self.handle_sidebar_action(action, Some(ctx));
         }
 
-        // 3. Central Content Panel
+        // 4. Central Content Panel
         let mut detail_action = None;
         let mut empty_state_create = false;
 
@@ -433,7 +635,7 @@ impl FaroQemApp {
             self.handle_vm_detail_action(action, Some(ctx));
         }
 
-        // 4. Modal Settings Dialog
+        // 5. Modal Settings Dialog
         if self.settings_open {
             let mut dialog =
                 SettingsDialog::new(&mut self.settings_open, &mut self.settings, &mut self.i18n);
@@ -442,6 +644,42 @@ impl FaroQemApp {
                 apply_theme(ctx, &self.settings.theme);
                 self.i18n.set_locale(&self.settings.language);
             }
+        }
+
+        // 6. About Dialog
+        if self.about_open {
+            let mut is_open = self.about_open;
+            egui::Window::new(self.i18n.t("about"))
+                .open(&mut is_open)
+                .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.set_min_width(320.0);
+                    ui.add_space(8.0);
+                    ui.vertical_centered(|ui| {
+                        if let Some(ref logo) = self.logo_texture {
+                            ui.image((logo.id(), egui::vec2(64.0, 64.0)));
+                            ui.add_space(6.0);
+                        }
+                        ui.heading("FARO QEM");
+                        ui.label(
+                            egui::RichText::new("(C) R.Trunk 2026")
+                                .strong()
+                                .size(12.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                        ui.add_space(8.0);
+                        ui.label("Modern QEMU Virtual Machine Manager");
+                        ui.label("Swiss High-Modernist Desktop Interface");
+                        ui.add_space(12.0);
+                        if ui.button(self.i18n.t("close")).clicked() {
+                            self.about_open = false;
+                        }
+                        ui.add_space(4.0);
+                    });
+                });
+            self.about_open = is_open;
         }
     }
 }
