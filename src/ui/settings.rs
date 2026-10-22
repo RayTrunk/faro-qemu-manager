@@ -14,6 +14,7 @@ pub struct SettingsDialog<'a> {
     pub open: &'a mut bool,
     pub settings: &'a mut AppSettings,
     pub i18n: &'a mut I18n,
+    pub logo: Option<&'a egui::TextureHandle>,
 }
 
 impl<'a> SettingsDialog<'a> {
@@ -23,7 +24,14 @@ impl<'a> SettingsDialog<'a> {
             open,
             settings,
             i18n,
+            logo: None,
         }
+    }
+
+    /// Attach application logo texture
+    pub fn with_logo(mut self, logo: Option<&'a egui::TextureHandle>) -> Self {
+        self.logo = logo;
+        self
     }
 
     /// Renders the settings dialog window.
@@ -45,6 +53,22 @@ impl<'a> SettingsDialog<'a> {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]);
 
         window.show(ctx, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if let Some(logo) = self.logo {
+                    ui.image((logo.id(), egui::vec2(32.0, 32.0)));
+                }
+                ui.vertical(|ui| {
+                    ui.heading("FARO QEM");
+                    ui.label(
+                        egui::RichText::new("(C) R.Trunk 2026")
+                            .size(10.0)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                });
+            });
+            ui.add_space(4.0);
+            ui.separator();
             ui.add_space(4.0);
             section_header(ui, self.i18n.t("settings"));
 

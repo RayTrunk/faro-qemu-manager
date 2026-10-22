@@ -373,6 +373,7 @@ impl FaroQemApp {
                     &self.i18n,
                 )
                 .with_delete_confirmation(&mut self.confirming_delete_id)
+                .with_logo(self.logo_texture.as_ref())
                 .show(ui);
             });
 
@@ -405,7 +406,8 @@ impl FaroQemApp {
                         qemu_img.as_deref(),
                         &mut self.create_disk_modal,
                     )
-                    .with_console(console_buf);
+                    .with_console(console_buf)
+                    .with_logo(self.logo_texture.as_ref());
 
                     if let Some(p) = pid {
                         view = view.with_pid(p);

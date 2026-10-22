@@ -157,209 +157,221 @@ impl<'a> SidebarView<'a> {
         ui.separator();
         ui.add_space(4.0);
 
-        // 3. Scrollable VM list
-        // Leave room for the bottom toolbar and separator
-        let toolbar_height = if ui.available_width() < 310.0 {
-            72.0
-        } else {
-            38.0
-        };
-        let list_height = (ui.available_height() - toolbar_height - 12.0).max(60.0);
+        // 3. Bottom Toolbar & Scrollable VM list
+        // Dock toolbar firmly at the bottom using bottom_up layout so it never overlaps
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            ui.add_space(4.0);
 
-        egui::ScrollArea::vertical()
-            .max_height(list_height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let query = self.search_query.trim().to_lowercase();
-                let filtered_vms: Vec<&VmConfig> = self
-                    .vms
-                    .iter()
-                    .filter(|vm| {
-                        if query.is_empty() {
-                            true
-                        } else {
-                            vm.name.to_lowercase().contains(&query)
-                                || vm.arch.as_str().to_lowercase().contains(&query)
-                        }
-                    })
-                    .collect();
+            // Bottom Toolbar
+            ui.horizontal_wrapped(|ui| {
+                // [+ New VM]
+                let new_btn =
+                    egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
+                        .fill(COLOR_PRIMARY);
+                if ui.add(new_btn).clicked() {
+                    action = Some(SidebarAction::NewVm);
+                }
 
-                if filtered_vms.is_empty() {
-                    ui.add_space(20.0);
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new(self.i18n.t("no_vms_found"))
-                                .color(ui.visuals().weak_text_color())
-                                .italics(),
-                        );
-                    });
-                } else {
-                    for vm in filtered_vms {
-                        let is_selected = self.selected_vm_id == Some(vm.id);
-                        let status = self
-                            .vm_statuses
-                            .get(&vm.id)
-                            .cloned()
-                            .unwrap_or(VmStatus::Stopped);
-
-                        let mut frame =
-                            card_frame(ui.visuals()).inner_margin(Margin::symmetric(10.0, 8.0));
-
-                        if is_selected {
-                            frame = frame.stroke(Stroke::new(2.0, COLOR_PRIMARY));
-                            if ui.visuals().dark_mode {
-                                frame = frame.fill(COLOR_DARK_SURFACE_HOVER);
-                            } else {
-                                frame = frame.fill(COLOR_LIGHT_SURFACE_HOVER);
-                            }
-                        }
-
-                        let card_resp = frame
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    // Architecture / OS icon
-                                    let (arch_icon, icon_color) = match vm.arch {
-                                        Arch::X86_64 => (icons::VM, COLOR_PRIMARY),
-                                        Arch::I386 => (icons::VM, COLOR_ACCENT),
-                                        Arch::Aarch64 => (icons::CPU, COLOR_PRIMARY),
-                                        Arch::Arm => (icons::CPU, COLOR_ACCENT),
-                                        Arch::Riscv64 => (icons::CONSOLE, COLOR_ACCENT),
-                                    };
-                                    ui.label(
-                                        egui::RichText::new(arch_icon).size(18.0).color(icon_color),
-                                    );
-
-                                    ui.vertical(|ui| {
-                                        // Row 1: VM name & status badge
-                                        ui.horizontal(|ui| {
-                                            let name_text = if is_selected {
-                                                egui::RichText::new(&vm.name)
-                                                    .strong()
-                                                    .color(COLOR_PRIMARY)
-                                            } else {
-                                                egui::RichText::new(&vm.name).strong()
-                                            };
-                                            ui.label(name_text);
-
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| match &status {
-                                                    VmStatus::Running { pid } => {
-                                                        status_badge(
-                                                            ui,
-                                                            &format!(
-                                                                "{} ({})",
-                                                                self.i18n.t("status_running"),
-                                                                pid
-                                                            ),
-                                                            COLOR_RUNNING,
-                                                        );
-                                                    }
-                                                    VmStatus::Stopped => {
-                                                        status_badge(
-                                                            ui,
-                                                            self.i18n.t("status_stopped"),
-                                                            COLOR_STOPPED,
-                                                        );
-                                                    }
-                                                    VmStatus::Error(err) => {
-                                                        let badge_resp = status_badge_interactive(
-                                                            ui,
-                                                            self.i18n.t("status_error"),
-                                                            COLOR_ERROR,
-                                                        );
-                                                        if !err.is_empty() {
-                                                            badge_resp.on_hover_text(err.as_str());
-                                                        }
-                                                    }
-                                                },
-                                            );
-                                        });
-
-                                        // Row 2: Specs preview (e.g. "x86_64 • 4 cores, 4096 MB")
-                                        let core_label =
-                                            if vm.cpu_cores == 1 { "core" } else { "cores" };
-                                        let specs_text = format!(
-                                            "{} • {} {}, {} MB",
-                                            vm.arch.as_str(),
-                                            vm.cpu_cores,
-                                            core_label,
-                                            vm.memory_mb
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(specs_text)
-                                                .size(11.0)
-                                                .color(ui.visuals().weak_text_color()),
-                                        );
-                                    });
-                                });
-                            })
-                            .response;
-
-                        let interact = ui.interact(
-                            card_resp.rect,
-                            ui.make_persistent_id(vm.id),
-                            egui::Sense::click(),
-                        );
-                        if interact.clicked() {
-                            action = Some(SidebarAction::SelectVm(vm.id));
-                        }
-                        if interact.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        ui.add_space(4.0);
+                // [Duplicate] (enabled if VM selected)
+                let can_dup = self.selected_vm_id.is_some();
+                let dup_btn =
+                    egui::Button::new(format!("{} {}", icons::EDIT, self.i18n.t("duplicate")));
+                if ui.add_enabled(can_dup, dup_btn).clicked() {
+                    if let Some(id) = self.selected_vm_id {
+                        action = Some(SidebarAction::DuplicateVm(id));
                     }
+                }
+
+                // [Delete] (enabled if VM selected)
+                let can_del = self.selected_vm_id.is_some();
+                let del_btn =
+                    egui::Button::new(format!("{} {}", icons::DELETE, self.i18n.t("delete"))).fill(
+                        if can_del {
+                            COLOR_ERROR.linear_multiply(0.2)
+                        } else {
+                            Color32::TRANSPARENT
+                        },
+                    );
+                if ui.add_enabled(can_del, del_btn).clicked() {
+                    if let Some(id) = self.selected_vm_id {
+                        if let Some(ref mut confirm_slot) = self.confirming_delete_id {
+                            **confirm_slot = Some(id);
+                        } else {
+                            action = Some(SidebarAction::DeleteVm(id));
+                        }
+                    }
+                }
+
+                // [⚙ Settings]
+                let set_btn =
+                    egui::Button::new(format!("{} {}", icons::SETTINGS, self.i18n.t("settings")));
+                if ui.add(set_btn).clicked() {
+                    action = Some(SidebarAction::OpenSettings);
                 }
             });
 
-        ui.separator();
-        ui.add_space(4.0);
+            ui.add_space(4.0);
+            ui.separator();
+            ui.add_space(4.0);
 
-        // 4. Bottom Toolbar
-        ui.horizontal_wrapped(|ui| {
-            // [+ New VM]
-            let new_btn = egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
-                .fill(COLOR_PRIMARY);
-            if ui.add(new_btn).clicked() {
-                action = Some(SidebarAction::NewVm);
-            }
+            // Scrollable VM list fills all remaining height without overlapping
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let query = self.search_query.trim().to_lowercase();
+                        let filtered_vms: Vec<&VmConfig> = self
+                            .vms
+                            .iter()
+                            .filter(|vm| {
+                                if query.is_empty() {
+                                    true
+                                } else {
+                                    vm.name.to_lowercase().contains(&query)
+                                        || vm.arch.as_str().to_lowercase().contains(&query)
+                                }
+                            })
+                            .collect();
 
-            // [Duplicate] (enabled if VM selected)
-            let can_dup = self.selected_vm_id.is_some();
-            let dup_btn =
-                egui::Button::new(format!("{} {}", icons::EDIT, self.i18n.t("duplicate")));
-            if ui.add_enabled(can_dup, dup_btn).clicked() {
-                if let Some(id) = self.selected_vm_id {
-                    action = Some(SidebarAction::DuplicateVm(id));
-                }
-            }
+                        if filtered_vms.is_empty() {
+                            ui.add_space(20.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(
+                                    egui::RichText::new(self.i18n.t("no_vms_found"))
+                                        .color(ui.visuals().weak_text_color())
+                                        .italics(),
+                                );
+                            });
+                        } else {
+                            for vm in filtered_vms {
+                                let is_selected = self.selected_vm_id == Some(vm.id);
+                                let status = self
+                                    .vm_statuses
+                                    .get(&vm.id)
+                                    .cloned()
+                                    .unwrap_or(VmStatus::Stopped);
 
-            // [Delete] (enabled if VM selected)
-            let can_del = self.selected_vm_id.is_some();
-            let del_btn = egui::Button::new(format!("{} {}", icons::DELETE, self.i18n.t("delete")))
-                .fill(if can_del {
-                    COLOR_ERROR.linear_multiply(0.2)
-                } else {
-                    Color32::TRANSPARENT
-                });
-            if ui.add_enabled(can_del, del_btn).clicked() {
-                if let Some(id) = self.selected_vm_id {
-                    if let Some(ref mut confirm_slot) = self.confirming_delete_id {
-                        **confirm_slot = Some(id);
-                    } else {
-                        action = Some(SidebarAction::DeleteVm(id));
-                    }
-                }
-            }
+                                let mut frame = card_frame(ui.visuals())
+                                    .inner_margin(Margin::symmetric(10.0, 8.0));
 
-            // [⚙ Settings]
-            let set_btn =
-                egui::Button::new(format!("{} {}", icons::SETTINGS, self.i18n.t("settings")));
-            if ui.add(set_btn).clicked() {
-                action = Some(SidebarAction::OpenSettings);
-            }
+                                if is_selected {
+                                    frame = frame.stroke(Stroke::new(2.0, COLOR_PRIMARY));
+                                    if ui.visuals().dark_mode {
+                                        frame = frame.fill(COLOR_DARK_SURFACE_HOVER);
+                                    } else {
+                                        frame = frame.fill(COLOR_LIGHT_SURFACE_HOVER);
+                                    }
+                                }
+
+                                let card_resp = frame
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            // Architecture / OS icon
+                                            let (arch_icon, icon_color) = match vm.arch {
+                                                Arch::X86_64 => (icons::VM, COLOR_PRIMARY),
+                                                Arch::I386 => (icons::VM, COLOR_ACCENT),
+                                                Arch::Aarch64 => (icons::CPU, COLOR_PRIMARY),
+                                                Arch::Arm => (icons::CPU, COLOR_ACCENT),
+                                                Arch::Riscv64 => (icons::CONSOLE, COLOR_ACCENT),
+                                            };
+                                            ui.label(
+                                                egui::RichText::new(arch_icon)
+                                                    .size(18.0)
+                                                    .color(icon_color),
+                                            );
+
+                                            ui.vertical(|ui| {
+                                                // Row 1: VM name & status badge
+                                                ui.horizontal(|ui| {
+                                                    let name_text = if is_selected {
+                                                        egui::RichText::new(&vm.name)
+                                                            .strong()
+                                                            .color(COLOR_PRIMARY)
+                                                    } else {
+                                                        egui::RichText::new(&vm.name).strong()
+                                                    };
+                                                    ui.label(name_text);
+
+                                                    ui.with_layout(
+                                                        egui::Layout::right_to_left(
+                                                            egui::Align::Center,
+                                                        ),
+                                                        |ui| match &status {
+                                                            VmStatus::Running { pid } => {
+                                                                status_badge(
+                                                                    ui,
+                                                                    &format!(
+                                                                        "{} {}",
+                                                                        icons::PLAY,
+                                                                        pid
+                                                                    ),
+                                                                    COLOR_RUNNING,
+                                                                );
+                                                            }
+                                                            VmStatus::Stopped => {
+                                                                status_badge(
+                                                                    ui,
+                                                                    self.i18n.t("status_stopped"),
+                                                                    COLOR_STOPPED,
+                                                                );
+                                                            }
+                                                            VmStatus::Error(err) => {
+                                                                let badge_resp =
+                                                                    status_badge_interactive(
+                                                                        ui,
+                                                                        self.i18n.t("status_error"),
+                                                                        COLOR_ERROR,
+                                                                    );
+                                                                if !err.is_empty() {
+                                                                    badge_resp.on_hover_text(
+                                                                        err.as_str(),
+                                                                    );
+                                                                }
+                                                            }
+                                                        },
+                                                    );
+                                                });
+
+                                                // Row 2: Specs preview (e.g. "x86_64 • 4 cores, 4096 MB")
+                                                let core_label = if vm.cpu_cores == 1 {
+                                                    "core"
+                                                } else {
+                                                    "cores"
+                                                };
+                                                let specs_text = format!(
+                                                    "{} • {} {}, {} MB",
+                                                    vm.arch.as_str(),
+                                                    vm.cpu_cores,
+                                                    core_label,
+                                                    vm.memory_mb
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(specs_text)
+                                                        .size(11.0)
+                                                        .color(ui.visuals().weak_text_color()),
+                                                );
+                                            });
+                                        });
+                                    })
+                                    .response;
+
+                                let interact = ui.interact(
+                                    card_resp.rect,
+                                    ui.make_persistent_id(vm.id),
+                                    egui::Sense::click(),
+                                );
+                                if interact.clicked() {
+                                    action = Some(SidebarAction::SelectVm(vm.id));
+                                }
+                                if interact.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                ui.add_space(4.0);
+                            }
+                        }
+                    });
+            });
         });
-
         // 5. Delete Confirmation Modal Dialog
         if let Some(ref mut confirm_slot) = self.confirming_delete_id {
             if let Some(del_id) = **confirm_slot {

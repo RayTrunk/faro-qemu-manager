@@ -110,6 +110,7 @@ pub struct VmDetailView<'a> {
     pub console_logs: Option<&'a mut ConsoleLogBuffer>,
     pub pid: Option<u32>,
     pub cli_command: Option<&'a str>,
+    pub logo: Option<&'a egui::TextureHandle>,
 }
 
 impl<'a> VmDetailView<'a> {
@@ -132,7 +133,14 @@ impl<'a> VmDetailView<'a> {
             console_logs: None,
             pid: None,
             cli_command: None,
+            logo: None,
         }
+    }
+
+    /// Attach logo texture to detail view header
+    pub fn with_logo(mut self, logo: Option<&'a egui::TextureHandle>) -> Self {
+        self.logo = logo;
+        self
     }
 
     /// Attach live console log buffer to detail view
@@ -157,69 +165,136 @@ impl<'a> VmDetailView<'a> {
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<VmDetailAction> {
         let mut action: Option<VmDetailAction> = None;
 
-        // 1. Top Action Bar
-        ui.horizontal_wrapped(|ui| {
-            // VM Name text editor with icon
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(icons::VM)
-                        .size(20.0)
-                        .color(COLOR_PRIMARY),
-                );
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.vm.name)
-                        .font(egui::TextStyle::Heading)
-                        .desired_width(200.0),
-                );
-            });
-
-            ui.add_space(8.0);
-
-            // Quick Specs Summary Pill
-            let specs_pill_text = format!(
-                "{} | {} Cores | {} MB ({:.1} GB) | {}",
-                self.vm.arch.as_str(),
-                self.vm.cpu_cores,
-                self.vm.memory_mb,
-                self.vm.memory_mb as f64 / 1024.0,
-                self.vm.accel.as_str().to_uppercase()
-            );
-            status_badge(ui, &specs_pill_text, COLOR_DARK_SURFACE_HOVER);
-
-            // Right-aligned action buttons
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // [💾 Save] button
-                let save_btn =
-                    egui::Button::new(format!("{} {}", icons::SAVE, self.i18n.t("save")))
-                        .fill(COLOR_PRIMARY);
-                if ui.add(save_btn).clicked() {
-                    action = Some(VmDetailAction::Save(self.vm.id));
-                }
-
-                // [⏹ Force Stop] button
-                let stop_btn =
-                    egui::Button::new(format!("{} {}", icons::STOP, self.i18n.t("stop"))).fill(
-                        if self.is_running {
-                            COLOR_ERROR
-                        } else {
-                            COLOR_STOPPED
-                        },
+        // 1. Top Header Card
+        card_frame(ui.visuals()).show(ui, |ui| {
+            let compact = ui.available_width() < 540.0;
+            if compact {
+                // Stacked layout for compact / narrow windows
+                ui.horizontal(|ui| {
+                    if let Some(logo) = self.logo {
+                        ui.image((logo.id(), egui::vec2(24.0, 24.0)));
+                    } else {
+                        ui.label(
+                            egui::RichText::new(icons::VM)
+                                .size(20.0)
+                                .color(COLOR_PRIMARY),
+                        );
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.vm.name)
+                            .font(egui::TextStyle::Heading)
+                            .desired_width((ui.available_width() - 30.0).max(100.0)),
                     );
-                if ui.add_enabled(self.is_running, stop_btn).clicked() {
-                    action = Some(VmDetailAction::Stop(self.vm.id));
-                }
+                });
 
-                // [▶ Launch VM] button
-                let launch_btn =
-                    egui::Button::new(format!("{} {}", icons::PLAY, self.i18n.t("launch"))).fill(
-                        if !self.is_running {
-                            COLOR_RUNNING
-                        } else {
-                            COLOR_STOPPED
-                        },
+                ui.add_space(6.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    // [▶ Launch VM]
+                    let launch_btn =
+                        egui::Button::new(format!("{} {}", icons::PLAY, self.i18n.t("launch")))
+                            .fill(if !self.is_running {
+                                COLOR_RUNNING
+                            } else {
+                                COLOR_STOPPED
+                            });
+                    if ui.add_enabled(!self.is_running, launch_btn).clicked() {
+                        action = Some(VmDetailAction::Launch(self.vm.id));
+                    }
+
+                    // [⏹ Force Stop]
+                    let stop_btn =
+                        egui::Button::new(format!("{} {}", icons::STOP, self.i18n.t("stop"))).fill(
+                            if self.is_running {
+                                COLOR_ERROR
+                            } else {
+                                COLOR_STOPPED
+                            },
+                        );
+                    if ui.add_enabled(self.is_running, stop_btn).clicked() {
+                        action = Some(VmDetailAction::Stop(self.vm.id));
+                    }
+
+                    // [💾 Save]
+                    let save_btn =
+                        egui::Button::new(format!("{} {}", icons::SAVE, self.i18n.t("save")))
+                            .fill(COLOR_PRIMARY);
+                    if ui.add(save_btn).clicked() {
+                        action = Some(VmDetailAction::Save(self.vm.id));
+                    }
+                });
+            } else {
+                // Standard wide layout: Name on left, Actions right-aligned on the same row
+                ui.horizontal(|ui| {
+                    if let Some(logo) = self.logo {
+                        ui.image((logo.id(), egui::vec2(26.0, 26.0)));
+                    } else {
+                        ui.label(
+                            egui::RichText::new(icons::VM)
+                                .size(22.0)
+                                .color(COLOR_PRIMARY),
+                        );
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.vm.name)
+                            .font(egui::TextStyle::Heading)
+                            .desired_width(200.0),
                     );
-                if ui.add_enabled(!self.is_running, launch_btn).clicked() {
-                    action = Some(VmDetailAction::Launch(self.vm.id));
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // 1. [💾 Save] (rightmost)
+                        let save_btn =
+                            egui::Button::new(format!("{} {}", icons::SAVE, self.i18n.t("save")))
+                                .fill(COLOR_PRIMARY);
+                        if ui.add(save_btn).clicked() {
+                            action = Some(VmDetailAction::Save(self.vm.id));
+                        }
+
+                        // 2. [⏹ Force Stop] (middle)
+                        let stop_btn =
+                            egui::Button::new(format!("{} {}", icons::STOP, self.i18n.t("stop")))
+                                .fill(if self.is_running {
+                                    COLOR_ERROR
+                                } else {
+                                    COLOR_STOPPED
+                                });
+                        if ui.add_enabled(self.is_running, stop_btn).clicked() {
+                            action = Some(VmDetailAction::Stop(self.vm.id));
+                        }
+
+                        // 3. [▶ Launch VM] (leftmost of actions)
+                        let launch_btn =
+                            egui::Button::new(format!("{} {}", icons::PLAY, self.i18n.t("launch")))
+                                .fill(if !self.is_running {
+                                    COLOR_RUNNING
+                                } else {
+                                    COLOR_STOPPED
+                                });
+                        if ui.add_enabled(!self.is_running, launch_btn).clicked() {
+                            action = Some(VmDetailAction::Launch(self.vm.id));
+                        }
+                    });
+                });
+            }
+
+            ui.add_space(6.0);
+
+            // Row 2: Specs Summary Pill & Status Badges (always on their own row)
+            ui.horizontal_wrapped(|ui| {
+                let specs_pill_text = format!(
+                    "{} | {} Cores | {} MB ({:.1} GB) | {}",
+                    self.vm.arch.as_str(),
+                    self.vm.cpu_cores,
+                    self.vm.memory_mb,
+                    self.vm.memory_mb as f64 / 1024.0,
+                    self.vm.accel.as_str().to_uppercase()
+                );
+                status_badge(ui, &specs_pill_text, COLOR_DARK_SURFACE_HOVER);
+
+                if self.is_running {
+                    if let Some(pid) = self.pid {
+                        status_badge(ui, &format!("PID: {}", pid), COLOR_RUNNING);
+                    }
                 }
             });
         });
@@ -227,7 +302,7 @@ impl<'a> VmDetailView<'a> {
         ui.add_space(8.0);
 
         // 2. Tab Navigation Bar
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let tab_items = [
                 (DetailTab::System, icons::CPU, self.i18n.t("tab_system")),
                 (DetailTab::Storage, icons::DISK, self.i18n.t("tab_storage")),

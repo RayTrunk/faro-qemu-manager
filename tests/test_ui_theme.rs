@@ -182,3 +182,20 @@ fn test_ui_components_rendering() {
         });
     });
 }
+
+#[test]
+fn test_load_app_logo_and_icon() {
+    let logo = load_app_logo();
+    assert!(logo.is_some(), "Embedded logo must load successfully");
+    let logo_img = logo.unwrap();
+    assert!(logo_img.width() > 0);
+    assert!(logo_img.height() > 0);
+    assert_eq!(logo_img.pixels.len(), logo_img.width() * logo_img.height());
+
+    let icon = load_app_icon();
+    assert!(icon.is_some(), "Embedded app icon must load successfully");
+    let icon_data = icon.unwrap();
+    assert_eq!(icon_data.width, 128);
+    assert_eq!(icon_data.height, 128);
+    assert_eq!(icon_data.rgba.len(), 128 * 128 * 4);
+}

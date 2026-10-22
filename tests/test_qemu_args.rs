@@ -189,3 +189,19 @@ fn test_find_qemu_binary_file_candidate_name_filtering() {
     let found_invalid = find_qemu_binary(Some(&invalid_file), Arch::X86_64);
     assert_ne!(found_invalid, Some(invalid_file.clone()));
 }
+
+#[test]
+fn test_build_qemu_args_mouse_tablet_and_show_cursor() {
+    let vm = VmConfig::new_default("Debian Desktop", Arch::X86_64);
+    let args = build_qemu_args(&vm);
+    let joined = args.join(" ");
+
+    assert!(
+        joined.contains("-usb -device usb-tablet"),
+        "Must configure usb-tablet for absolute pointer"
+    );
+    assert!(
+        joined.contains("-display default,show-cursor=on"),
+        "Must enable show-cursor for desktop GUI"
+    );
+}

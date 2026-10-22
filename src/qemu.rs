@@ -257,12 +257,31 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
 
     let display_backend = vm.display.display_backend.trim();
     if !display_backend.is_empty() {
+        let display_arg = if vga_type.eq_ignore_ascii_case("none") {
+            display_backend.to_string()
+        } else if display_backend.eq_ignore_ascii_case("default") {
+            "default,show-cursor=on".to_string()
+        } else if display_backend.eq_ignore_ascii_case("gtk")
+            || display_backend.eq_ignore_ascii_case("sdl")
+        {
+            format!("{},show-cursor=on", display_backend)
+        } else {
+            display_backend.to_string()
+        };
         args.push("-display".to_string());
-        args.push(display_backend.to_string());
+        args.push(display_arg);
     }
 
     if vm.display.fullscreen {
         args.push("-full-screen".to_string());
+    }
+
+    // Absolute pointing device (USB tablet) so the mouse cursor is always visible and synced
+    let has_tablet = vm.extra_args.contains("tablet") || vm.extra_args.contains("mouse");
+    if !has_tablet && !vga_type.eq_ignore_ascii_case("none") {
+        args.push("-usb".to_string());
+        args.push("-device".to_string());
+        args.push("usb-tablet".to_string());
     }
 
     // 8. Network configuration

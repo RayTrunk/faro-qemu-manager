@@ -431,12 +431,15 @@ pub fn load_app_logo() -> Option<egui::ColorImage> {
     Some(egui::ColorImage::from_rgba_unmultiplied(size, &pixels))
 }
 
-/// Load the embedded FARO QEM logo as window icon data.
+/// Load the embedded FARO QEM logo as window icon data (scaled to 128x128 for Win32/X11 compatibility).
 pub fn load_app_icon() -> Option<egui::IconData> {
     let bytes = include_bytes!("../../assets/logo.jpeg");
-    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
-    let (width, height) = (img.width(), img.height());
-    let rgba = img.into_raw();
+    let img = image::load_from_memory(bytes).ok()?;
+    let resized = img
+        .resize(128, 128, image::imageops::FilterType::Lanczos3)
+        .to_rgba8();
+    let (width, height) = (resized.width(), resized.height());
+    let rgba = resized.into_raw();
     Some(egui::IconData {
         rgba,
         width,
