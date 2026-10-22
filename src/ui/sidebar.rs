@@ -10,7 +10,7 @@ use crate::i18n::I18n;
 use crate::ui::theme::{
     card_frame, danger_button, icons, status_badge, status_badge_interactive, COLOR_ACCENT,
     COLOR_DARK_SURFACE_HOVER, COLOR_ERROR, COLOR_LIGHT_SURFACE_HOVER, COLOR_PRIMARY, COLOR_RUNNING,
-    COLOR_STOPPED,
+    COLOR_STOPPED, ROUNDING_BADGE,
 };
 
 /// Actions emitted by the sidebar navigation and toolbar
@@ -162,12 +162,15 @@ impl<'a> SidebarView<'a> {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             ui.add_space(4.0);
 
-            // Bottom Toolbar
+            // Bottom Toolbar (Swiss Architectural Flat Actions)
             ui.horizontal_wrapped(|ui| {
-                // [+ New VM]
-                let new_btn =
-                    egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
-                        .fill(COLOR_PRIMARY);
+                // [+ New VM] (Primary Klein Blue)
+                let new_btn = egui::Button::new(
+                    egui::RichText::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
+                        .strong()
+                        .color(Color32::WHITE),
+                )
+                .fill(COLOR_PRIMARY);
                 if ui.add(new_btn).clicked() {
                     action = Some(SidebarAction::NewVm);
                 }
@@ -184,14 +187,19 @@ impl<'a> SidebarView<'a> {
 
                 // [Delete] (enabled if VM selected)
                 let can_del = self.selected_vm_id.is_some();
-                let del_btn =
-                    egui::Button::new(format!("{} {}", icons::DELETE, self.i18n.t("delete"))).fill(
-                        if can_del {
-                            COLOR_ERROR.linear_multiply(0.2)
+                let del_btn = egui::Button::new(
+                    egui::RichText::new(format!("{} {}", icons::DELETE, self.i18n.t("delete")))
+                        .color(if can_del {
+                            COLOR_ERROR
                         } else {
-                            Color32::TRANSPARENT
-                        },
-                    );
+                            ui.visuals().weak_text_color()
+                        }),
+                )
+                .fill(if can_del {
+                    COLOR_ERROR.linear_multiply(0.12)
+                } else {
+                    Color32::TRANSPARENT
+                });
                 if ui.add_enabled(can_del, del_btn).clicked() {
                     if let Some(id) = self.selected_vm_id {
                         if let Some(ref mut confirm_slot) = self.confirming_delete_id {
@@ -252,10 +260,10 @@ impl<'a> SidebarView<'a> {
                                     .unwrap_or(VmStatus::Stopped);
 
                                 let mut frame = card_frame(ui.visuals())
-                                    .inner_margin(Margin::symmetric(10.0, 8.0));
+                                    .inner_margin(Margin::symmetric(12.0, 9.0));
 
                                 if is_selected {
-                                    frame = frame.stroke(Stroke::new(2.0, COLOR_PRIMARY));
+                                    frame = frame.stroke(Stroke::new(1.0, COLOR_PRIMARY));
                                     if ui.visuals().dark_mode {
                                         frame = frame.fill(COLOR_DARK_SURFACE_HOVER);
                                     } else {
@@ -332,28 +340,44 @@ impl<'a> SidebarView<'a> {
                                                     );
                                                 });
 
-                                                // Row 2: Specs preview (e.g. "x86_64 • 4 cores, 4096 MB")
-                                                let core_label = if vm.cpu_cores == 1 {
-                                                    "core"
+                                                // Row 2: Swiss tabular specs preview (e.g. "X86_64 · 4 vCPUs · 4096 MB")
+                                                let cpu_label = if vm.cpu_cores == 1 {
+                                                    "1 vCPU"
                                                 } else {
-                                                    "cores"
+                                                    &format!("{} vCPUs", vm.cpu_cores)
                                                 };
                                                 let specs_text = format!(
-                                                    "{} • {} {}, {} MB",
-                                                    vm.arch.as_str(),
-                                                    vm.cpu_cores,
-                                                    core_label,
+                                                    "{} · {} · {} MB",
+                                                    vm.arch.as_str().to_uppercase(),
+                                                    cpu_label,
                                                     vm.memory_mb
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(specs_text)
                                                         .size(11.0)
+                                                        .monospace()
                                                         .color(ui.visuals().weak_text_color()),
                                                 );
                                             });
                                         });
                                     })
                                     .response;
+
+                                // Swiss Left Registration Indicator Bar
+                                if is_selected {
+                                    let indicator_rect = egui::Rect::from_min_max(
+                                        card_resp.rect.left_top(),
+                                        egui::pos2(
+                                            card_resp.rect.left() + 3.0,
+                                            card_resp.rect.bottom(),
+                                        ),
+                                    );
+                                    ui.painter().rect_filled(
+                                        indicator_rect,
+                                        egui::Rounding::same(ROUNDING_BADGE),
+                                        COLOR_PRIMARY,
+                                    );
+                                }
 
                                 let interact = ui.interact(
                                     card_resp.rect,

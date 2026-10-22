@@ -493,10 +493,10 @@ impl<'a> ConsoleView<'a> {
 
         // --- Terminal Console Frame ---
         ui.add_space(6.0);
-        let terminal_bg = Color32::from_rgb(18, 20, 24);
+        let terminal_bg = Color32::from_rgb(10, 11, 14);
         let terminal_frame = Frame::none()
             .fill(terminal_bg)
-            .stroke(Stroke::new(1.0, Color32::from_rgb(45, 50, 62)))
+            .stroke(Stroke::new(1.0, COLOR_DARK_BORDER))
             .rounding(Rounding::same(ROUNDING_BUTTON))
             .inner_margin(Margin::same(10.0));
 
@@ -569,7 +569,7 @@ impl<'a> ConsoleView<'a> {
                             // Level Tag Pill
                             let tag_frame = Frame::none()
                                 .fill(entry.level.badge_bg())
-                                .rounding(Rounding::same(3.0))
+                                .rounding(Rounding::same(ROUNDING_BUTTON))
                                 .inner_margin(Margin::symmetric(4.0, 1.0));
 
                             tag_frame.show(ui, |ui| {

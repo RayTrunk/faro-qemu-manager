@@ -10,49 +10,49 @@ use egui::{
 // Status and Theme Color Palette
 // ---------------------------------------------------------------------------
 
-/// Emerald green for actively running virtual machines
-pub const COLOR_RUNNING: Color32 = Color32::from_rgb(46, 204, 113);
+/// Emerald green for actively running virtual machines (#10B981)
+pub const COLOR_RUNNING: Color32 = Color32::from_rgb(16, 185, 129);
 
-/// Neutral slate gray for powered-off / stopped virtual machines
-pub const COLOR_STOPPED: Color32 = Color32::from_rgb(149, 165, 166);
+/// Neutral slate / zinc gray for powered-off / stopped virtual machines (#71717A)
+pub const COLOR_STOPPED: Color32 = Color32::from_rgb(113, 113, 122);
 
-/// Crimson red for error states or dangerous actions
-pub const COLOR_ERROR: Color32 = Color32::from_rgb(231, 76, 60);
+/// Swiss crimson red for error states or dangerous actions (#E11D48)
+pub const COLOR_ERROR: Color32 = Color32::from_rgb(225, 29, 72);
 
-/// Primary brand blue for active widgets, primary actions, and focus rings
-pub const COLOR_PRIMARY: Color32 = Color32::from_rgb(41, 128, 185);
+/// Primary Yves Klein Blue for active widgets, primary actions, and focus rings (#002FA7)
+pub const COLOR_PRIMARY: Color32 = Color32::from_rgb(0, 47, 167);
 
-/// Hover tint for primary blue widgets
-pub const COLOR_PRIMARY_HOVER: Color32 = Color32::from_rgb(52, 152, 219);
+/// Hover tint for primary Klein Blue widgets (#1A44BD)
+pub const COLOR_PRIMARY_HOVER: Color32 = Color32::from_rgb(26, 68, 189);
 
-/// Purple accent for special highlights and VM tags
-pub const COLOR_ACCENT: Color32 = Color32::from_rgb(155, 89, 182);
+/// Violet / Indigo accent for special highlights and VM tags (#6366F1)
+pub const COLOR_ACCENT: Color32 = Color32::from_rgb(99, 102, 241);
 
-/// Warning yellow / amber
-pub const COLOR_WARNING: Color32 = Color32::from_rgb(241, 196, 15);
+/// Swiss amber warning (#F59E0B)
+pub const COLOR_WARNING: Color32 = Color32::from_rgb(245, 158, 11);
 
-// Dark theme surface colors
-pub const COLOR_DARK_BG: Color32 = Color32::from_rgb(24, 26, 32);
-pub const COLOR_DARK_SURFACE: Color32 = Color32::from_rgb(32, 35, 43);
-pub const COLOR_DARK_SURFACE_HOVER: Color32 = Color32::from_rgb(42, 46, 56);
-pub const COLOR_DARK_BORDER: Color32 = Color32::from_rgb(52, 58, 70);
+// Dark theme surface colors (Swiss High-Modernist Dark)
+pub const COLOR_DARK_BG: Color32 = Color32::from_rgb(14, 15, 18);
+pub const COLOR_DARK_SURFACE: Color32 = Color32::from_rgb(22, 23, 27);
+pub const COLOR_DARK_SURFACE_HOVER: Color32 = Color32::from_rgb(32, 34, 40);
+pub const COLOR_DARK_BORDER: Color32 = Color32::from_rgb(44, 46, 53);
 
-// Light theme surface colors
-pub const COLOR_LIGHT_BG: Color32 = Color32::from_rgb(246, 248, 251);
+// Light theme surface colors (Swiss High-Modernist Light)
+pub const COLOR_LIGHT_BG: Color32 = Color32::from_rgb(247, 247, 248);
 pub const COLOR_LIGHT_SURFACE: Color32 = Color32::from_rgb(255, 255, 255);
-pub const COLOR_LIGHT_SURFACE_HOVER: Color32 = Color32::from_rgb(238, 241, 247);
-pub const COLOR_LIGHT_BORDER: Color32 = Color32::from_rgb(215, 220, 230);
+pub const COLOR_LIGHT_SURFACE_HOVER: Color32 = Color32::from_rgb(240, 241, 244);
+pub const COLOR_LIGHT_BORDER: Color32 = Color32::from_rgb(226, 226, 230);
 
 // ---------------------------------------------------------------------------
-// Dimension & Rounding Constants
+// Dimension & Rounding Constants (Swiss Architectural Precision: 2px)
 // ---------------------------------------------------------------------------
 
-pub const ROUNDING_BADGE: f32 = 4.0;
-pub const ROUNDING_BUTTON: f32 = 6.0;
-pub const ROUNDING_CARD: f32 = 8.0;
-pub const ROUNDING_WINDOW: f32 = 8.0;
+pub const ROUNDING_BADGE: f32 = 2.0;
+pub const ROUNDING_BUTTON: f32 = 2.0;
+pub const ROUNDING_CARD: f32 = 2.0;
+pub const ROUNDING_WINDOW: f32 = 2.0;
 
-pub const PADDING_BADGE: Vec2 = Vec2::new(8.0, 3.0);
+pub const PADDING_BADGE: Vec2 = Vec2::new(6.0, 2.5);
 pub const PADDING_BUTTON: Vec2 = Vec2::new(12.0, 6.0);
 pub const PADDING_CARD: f32 = 12.0;
 
@@ -148,49 +148,49 @@ pub fn apply_theme(ctx: &Context, theme: &str) {
     ctx.set_visuals(visuals);
 }
 
-/// Create dark mode visuals
+/// Create dark mode visuals (Swiss High-Modernist Dark)
 fn create_dark_visuals() -> Visuals {
     let mut visuals = Visuals::dark();
 
     visuals.dark_mode = true;
     visuals.override_text_color = None;
 
-    // Background surfaces
+    // Background surfaces: deep neutral matte, no muddy brown/purple tint
     visuals.panel_fill = COLOR_DARK_BG;
     visuals.window_fill = COLOR_DARK_SURFACE;
-    visuals.extreme_bg_color = Color32::from_rgb(18, 20, 24);
-    visuals.faint_bg_color = Color32::from_rgb(28, 30, 36);
-    visuals.code_bg_color = Color32::from_rgb(22, 24, 30);
+    visuals.extreme_bg_color = Color32::from_rgb(10, 11, 14);
+    visuals.faint_bg_color = Color32::from_rgb(18, 19, 23);
+    visuals.code_bg_color = Color32::from_rgb(16, 17, 21);
 
-    // Window & dialogue styling
+    // Window & dialogue styling: 2px architectural precision, crisp hairline border
     visuals.window_rounding = Rounding::same(ROUNDING_WINDOW);
     visuals.window_stroke = Stroke::new(1.0, COLOR_DARK_BORDER);
     visuals.window_shadow = Shadow {
-        offset: vec2(0.0, 4.0),
-        blur: 16.0,
+        offset: vec2(0.0, 2.0),
+        blur: 10.0,
         spread: 0.0,
-        color: Color32::from_black_alpha(80),
+        color: Color32::from_black_alpha(70),
     };
 
     // Non-interactive widgets (frames, separators, labels)
     visuals.widgets.noninteractive.bg_fill = COLOR_DARK_SURFACE;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, COLOR_DARK_BORDER);
     visuals.widgets.noninteractive.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(190, 195, 205));
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(180, 184, 194));
 
-    // Inactive widgets (buttons, checkboxes at rest)
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(38, 42, 51);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(55, 60, 72));
+    // Inactive widgets (buttons, text inputs at rest)
+    visuals.widgets.inactive.bg_fill = Color32::from_rgb(26, 28, 34);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, COLOR_DARK_BORDER);
     visuals.widgets.inactive.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(225, 230, 238));
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(220, 224, 232));
 
-    // Hovered widgets
+    // Hovered widgets: crisp Klein Blue hairline focus
     visuals.widgets.hovered.bg_fill = COLOR_DARK_SURFACE_HOVER;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, COLOR_PRIMARY_HOVER);
     visuals.widgets.hovered.rounding = Rounding::same(ROUNDING_BUTTON);
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
-    // Active / pressed widgets
+    // Active / pressed widgets: Yves Klein Blue
     visuals.widgets.active.bg_fill = COLOR_PRIMARY;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, COLOR_PRIMARY_HOVER);
     visuals.widgets.active.rounding = Rounding::same(ROUNDING_BUTTON);
@@ -202,58 +202,58 @@ fn create_dark_visuals() -> Visuals {
     visuals.widgets.open.rounding = Rounding::same(ROUNDING_BUTTON);
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
-    // Text selection
-    visuals.selection.bg_fill = Color32::from_rgb(33, 90, 140);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(100, 180, 255));
+    // Text selection: Yves Klein Blue tint
+    visuals.selection.bg_fill = Color32::from_rgb(0, 47, 167);
+    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(60, 120, 255));
 
     visuals
 }
 
-/// Create light mode visuals
+/// Create light mode visuals (Swiss High-Modernist Light)
 fn create_light_visuals() -> Visuals {
     let mut visuals = Visuals::light();
 
     visuals.dark_mode = false;
     visuals.override_text_color = None;
 
-    // Background surfaces
+    // Background surfaces: pure white and stark light gray
     visuals.panel_fill = COLOR_LIGHT_BG;
     visuals.window_fill = COLOR_LIGHT_SURFACE;
-    visuals.extreme_bg_color = Color32::from_rgb(240, 243, 246);
-    visuals.faint_bg_color = Color32::from_rgb(244, 246, 249);
-    visuals.code_bg_color = Color32::from_rgb(238, 241, 245);
+    visuals.extreme_bg_color = Color32::from_rgb(242, 243, 245);
+    visuals.faint_bg_color = Color32::from_rgb(245, 246, 248);
+    visuals.code_bg_color = Color32::from_rgb(238, 239, 242);
 
-    // Window & dialogue styling
+    // Window & dialogue styling: 2px architectural precision, crisp hairline border
     visuals.window_rounding = Rounding::same(ROUNDING_WINDOW);
     visuals.window_stroke = Stroke::new(1.0, COLOR_LIGHT_BORDER);
     visuals.window_shadow = Shadow {
-        offset: vec2(0.0, 3.0),
-        blur: 12.0,
+        offset: vec2(0.0, 2.0),
+        blur: 8.0,
         spread: 0.0,
-        color: Color32::from_black_alpha(25),
+        color: Color32::from_black_alpha(20),
     };
 
     // Non-interactive widgets
     visuals.widgets.noninteractive.bg_fill = COLOR_LIGHT_SURFACE;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, COLOR_LIGHT_BORDER);
     visuals.widgets.noninteractive.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(70, 75, 85));
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(55, 60, 68));
 
     // Inactive widgets
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(238, 241, 246);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(205, 210, 220));
+    visuals.widgets.inactive.bg_fill = Color32::from_rgb(243, 244, 246);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, COLOR_LIGHT_BORDER);
     visuals.widgets.inactive.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(35, 40, 48));
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(25, 30, 36));
 
     // Hovered widgets
     visuals.widgets.hovered.bg_fill = COLOR_LIGHT_SURFACE_HOVER;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, COLOR_PRIMARY);
     visuals.widgets.hovered.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::from_rgb(15, 20, 25));
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::from_rgb(10, 15, 20));
 
-    // Active / pressed widgets
+    // Active / pressed widgets: Yves Klein Blue
     visuals.widgets.active.bg_fill = COLOR_PRIMARY;
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(31, 98, 145));
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, COLOR_PRIMARY_HOVER);
     visuals.widgets.active.rounding = Rounding::same(ROUNDING_BUTTON);
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
@@ -261,10 +261,10 @@ fn create_light_visuals() -> Visuals {
     visuals.widgets.open.bg_fill = COLOR_LIGHT_SURFACE_HOVER;
     visuals.widgets.open.bg_stroke = Stroke::new(1.0, COLOR_PRIMARY);
     visuals.widgets.open.rounding = Rounding::same(ROUNDING_BUTTON);
-    visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::from_rgb(15, 20, 25));
+    visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::from_rgb(10, 15, 20));
 
     // Text selection
-    visuals.selection.bg_fill = Color32::from_rgb(200, 225, 250);
+    visuals.selection.bg_fill = Color32::from_rgb(205, 225, 255);
     visuals.selection.stroke = Stroke::new(1.0, COLOR_PRIMARY);
 
     visuals

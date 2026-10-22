@@ -6,13 +6,13 @@ use faro_qem::ui::*;
 
 #[test]
 fn test_theme_colors() {
-    assert_eq!(COLOR_RUNNING, Color32::from_rgb(46, 204, 113));
-    assert_eq!(COLOR_STOPPED, Color32::from_rgb(149, 165, 166));
-    assert_eq!(COLOR_ERROR, Color32::from_rgb(231, 76, 60));
-    assert_eq!(COLOR_PRIMARY, Color32::from_rgb(41, 128, 185));
-    assert_eq!(COLOR_PRIMARY_HOVER, Color32::from_rgb(52, 152, 219));
-    assert_eq!(COLOR_ACCENT, Color32::from_rgb(155, 89, 182));
-    assert_eq!(COLOR_WARNING, Color32::from_rgb(241, 196, 15));
+    assert_eq!(COLOR_RUNNING, Color32::from_rgb(16, 185, 129));
+    assert_eq!(COLOR_STOPPED, Color32::from_rgb(113, 113, 122));
+    assert_eq!(COLOR_ERROR, Color32::from_rgb(225, 29, 72));
+    assert_eq!(COLOR_PRIMARY, Color32::from_rgb(0, 47, 167));
+    assert_eq!(COLOR_PRIMARY_HOVER, Color32::from_rgb(26, 68, 189));
+    assert_eq!(COLOR_ACCENT, Color32::from_rgb(99, 102, 241));
+    assert_eq!(COLOR_WARNING, Color32::from_rgb(245, 158, 11));
 }
 
 #[test]
