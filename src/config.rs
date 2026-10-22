@@ -358,11 +358,22 @@ impl Default for AppSettings {
 
 /// Resolve the default directory for application configurations
 pub fn default_config_dir() -> PathBuf {
-    if let Some(proj) = directories::ProjectDirs::from("com", "rtrunk", "faro-qem") {
-        proj.config_dir().to_path_buf()
-    } else {
-        PathBuf::from(".")
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return PathBuf::from(appdata).join("faro-qem");
+        }
     }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            return PathBuf::from(xdg).join("faro-qem");
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(".config").join("faro-qem");
+        }
+    }
+    PathBuf::from(".")
 }
 
 /// Resolve the default path for `vms.json`
@@ -386,11 +397,11 @@ pub fn load_vms(path: &Path) -> Vec<VmConfig> {
     }
 }
 
-/// Atomically save the list of VMs to a JSON file.
+/// Save the list of VMs to a JSON file.
 pub fn save_vms(path: &Path, vms: &[VmConfig]) -> Result<(), String> {
     let json = serde_json::to_string_pretty(vms)
         .map_err(|e| format!("Failed to serialize VM configurations: {}", e))?;
-    atomic_write_file(path, json.as_bytes())
+    write_config_file(path, json.as_bytes())
 }
 
 /// Load application settings from a JSON file. Returns defaults if missing or corrupted.
@@ -404,70 +415,20 @@ pub fn load_settings(path: &Path) -> AppSettings {
     }
 }
 
-/// Atomically save application settings to a JSON file.
+/// Save application settings to a JSON file.
 pub fn save_settings(path: &Path, settings: &AppSettings) -> Result<(), String> {
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("Failed to serialize app settings: {}", e))?;
-    atomic_write_file(path, json.as_bytes())
+    write_config_file(path, json.as_bytes())
 }
 
-/// Helper function to atomically write data to a target path using a temporary file
-fn atomic_write_file(path: &Path, data: &[u8]) -> Result<(), String> {
+/// Write data to a target path, creating parent directories if needed.
+fn write_config_file(path: &Path, data: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
         }
     }
-
-    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    let unique = Uuid::new_v4();
-    let temp_path = if let Some(parent) = path.parent() {
-        parent.join(format!(".{}_{}.tmp", file_name, unique))
-    } else {
-        PathBuf::from(format!(".{}_{}.tmp", file_name, unique))
-    };
-
-    if let Err(e) = std::fs::write(&temp_path, data) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(format!(
-            "Failed to write temporary file {}: {}",
-            temp_path.display(),
-            e
-        ));
-    }
-
-    #[cfg(not(windows))]
-    {
-        if let Err(e) = std::fs::rename(&temp_path, path) {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(format!(
-                "Failed to rename temporary file to {}: {}",
-                path.display(),
-                e
-            ));
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        if let Err(_e) = std::fs::rename(&temp_path, path) {
-            if path.exists() {
-                let _ = std::fs::remove_file(path);
-            }
-            if let Err(e2) = std::fs::rename(&temp_path, path) {
-                let _ = std::fs::remove_file(&temp_path);
-                if let Err(e3) = std::fs::write(path, data) {
-                    return Err(format!(
-                        "Failed to atomic save to {} (rename err: {}, direct write err: {})",
-                        path.display(),
-                        e2,
-                        e3
-                    ));
-                }
-            }
-        }
-    }
-
-    Ok(())
+    std::fs::write(path, data).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
 }

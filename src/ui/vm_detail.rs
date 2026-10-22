@@ -1239,24 +1239,3 @@ impl<'a> VmDetailView<'a> {
         }
     }
 }
-
-/// Helper function to render VM detail inspector view
-pub fn render_vm_detail(
-    ui: &mut egui::Ui,
-    vm: &mut VmConfig,
-    is_running: bool,
-    i18n: &I18n,
-    active_tab: &mut DetailTab,
-    qemu_img_binary: Option<&Path>,
-    disk_modal: &mut CreateDiskState,
-) -> Option<VmDetailAction> {
-    VmDetailView::new(
-        vm,
-        is_running,
-        i18n,
-        active_tab,
-        qemu_img_binary,
-        disk_modal,
-    )
-    .show(ui)
-}

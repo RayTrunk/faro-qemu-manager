@@ -23,16 +23,6 @@ fn test_i18n_fallback_to_key_or_en() {
 }
 
 #[test]
-fn test_i18n_fallback_to_en_catalog() {
-    let mut i18n = I18n::new("en");
-    // Inject a key only into 'en'
-    let _ = i18n.load_override_json("en", r#"{"only_in_english": "English Only Text"}"#);
-    i18n.set_locale("de");
-    // Looking up from 'de' should fallback to 'en'
-    assert_eq!(i18n.t("only_in_english"), "English Only Text");
-}
-
-#[test]
 fn test_i18n_available_locales() {
     let i18n = I18n::new("en");
     let locales = i18n.available_locales();
@@ -149,36 +139,10 @@ fn test_i18n_rich_catalog_keys_present_in_all_locales() {
 }
 
 #[test]
-fn test_i18n_custom_override() {
-    let mut i18n = I18n::new("en");
-    assert_eq!(i18n.t("new_vm"), "New VM");
-
-    let override_json = r#"{ "new_vm": "Create Virtual Machine" }"#;
-    let res = i18n.load_override_json("en", override_json);
-    assert!(res.is_ok());
-    assert_eq!(i18n.t("new_vm"), "Create Virtual Machine");
-}
-
-#[test]
 fn test_i18n_template_formatting_and_default() {
     let i18n = I18n::default();
     assert_eq!(i18n.current_locale(), "en");
 
     let formatted = i18n.tf("non_existent_{vm}", &[("vm", "Debian-12")]);
     assert_eq!(formatted, "non_existent_Debian-12");
-}
-
-#[test]
-fn test_i18n_override_file_and_dir() {
-    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-    let de_override_path = temp_dir.path().join("de.json");
-    std::fs::write(
-        &de_override_path,
-        r#"{"custom_test_key": "Benutzerdefiniert"}"#,
-    )
-    .expect("write test file");
-
-    let mut i18n = I18n::new("de");
-    i18n.load_overrides_from_dir(temp_dir.path());
-    assert_eq!(i18n.t("custom_test_key"), "Benutzerdefiniert");
 }

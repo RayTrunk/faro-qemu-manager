@@ -8,10 +8,7 @@ use uuid::Uuid;
 
 use faro_qem::config::{AppSettings, Arch, VmConfig};
 use faro_qem::i18n::I18n;
-use faro_qem::ui::{
-    render_settings_dialog, render_sidebar, render_sidebar_simple, SettingsDialog, SidebarAction,
-    SidebarView, VmStatus,
-};
+use faro_qem::ui::{SettingsDialog, SidebarAction, SidebarView, VmStatus};
 
 #[test]
 fn test_vm_status_helpers_and_display() {
@@ -44,7 +41,7 @@ fn test_sidebar_empty_list_rendering() {
 
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let action = render_sidebar_simple(ui, &vms, None, &mut search, &statuses, &i18n);
+            let action = SidebarView::new(&vms, None, &mut search, &statuses, &i18n).show(ui);
             assert_eq!(action, None);
         });
     });
@@ -77,15 +74,9 @@ fn test_sidebar_with_vms_and_statuses_rendering() {
 
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let action = render_sidebar(
-                ui,
-                &vms,
-                Some(vm1.id),
-                &mut search,
-                &statuses,
-                &i18n,
-                Some(&mut confirm_del),
-            );
+            let action = SidebarView::new(&vms, Some(vm1.id), &mut search, &statuses, &i18n)
+                .with_delete_confirmation(&mut confirm_del)
+                .show(ui);
             assert_eq!(action, None);
         });
     });
@@ -180,7 +171,7 @@ fn test_settings_dialog_closed_does_not_render() {
     let mut settings = AppSettings::default();
     let mut open = false;
 
-    let modified = render_settings_dialog(&ctx, &mut open, &mut settings, &mut i18n);
+    let modified = SettingsDialog::new(&mut open, &mut settings, &mut i18n).show(&ctx);
     assert!(!modified);
     assert!(!open);
 }

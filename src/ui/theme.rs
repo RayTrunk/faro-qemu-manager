@@ -16,9 +16,6 @@ pub const COLOR_RUNNING: Color32 = Color32::from_rgb(46, 204, 113);
 /// Neutral slate gray for powered-off / stopped virtual machines
 pub const COLOR_STOPPED: Color32 = Color32::from_rgb(149, 165, 166);
 
-/// Amber / orange for paused or suspended virtual machines
-pub const COLOR_PAUSED: Color32 = Color32::from_rgb(243, 156, 18);
-
 /// Crimson red for error states or dangerous actions
 pub const COLOR_ERROR: Color32 = Color32::from_rgb(231, 76, 60);
 
@@ -57,7 +54,6 @@ pub const ROUNDING_WINDOW: f32 = 8.0;
 
 pub const PADDING_BADGE: Vec2 = Vec2::new(8.0, 3.0);
 pub const PADDING_BUTTON: Vec2 = Vec2::new(12.0, 6.0);
-pub const PADDING_TAB: Vec2 = Vec2::new(14.0, 8.0);
 pub const PADDING_CARD: f32 = 12.0;
 
 // ---------------------------------------------------------------------------
@@ -67,8 +63,6 @@ pub const PADDING_CARD: f32 = 12.0;
 pub mod icons {
     pub const PLAY: &str = "\u{25B6}"; // ▶
     pub const STOP: &str = "\u{23F9}"; // ⏹
-    pub const PAUSE: &str = "\u{23F8}"; // ⏸
-    pub const REFRESH: &str = "\u{1F504}"; // 🔄
     pub const SETTINGS: &str = "\u{2699}"; // ⚙
     pub const ADD: &str = "\u{2795}"; // ➕
     pub const DELETE: &str = "\u{1F5D1}"; // 🗑
@@ -88,8 +82,6 @@ pub mod icons {
     pub const SEARCH: &str = "\u{1F50D}"; // 🔍
     pub const LOGS: &str = "\u{1F4DC}"; // 📜
     pub const COPY: &str = "\u{1F4CB}"; // 📋
-    pub const HELP: &str = "\u{2753}"; // ❓
-    pub const INFO: &str = "\u{2139}"; // ℹ
 }
 
 // ---------------------------------------------------------------------------
@@ -101,63 +93,7 @@ pub mod icons {
 /// Also configures clear typographic hierarchy (Heading: 20pt, Body: 14pt,
 /// Button: 14pt, Monospace: 13pt, Small: 11pt).
 pub fn configure_modern_fonts(ctx: &Context) {
-    let mut fonts = egui::FontDefinitions::default();
-
-    // Check system proportional fonts (Windows, Linux, macOS)
-    let proportional_candidates = [
-        // Windows
-        "C:\\Windows\\Fonts\\segoeui.ttf",
-        "C:\\Windows\\Fonts\\arial.ttf",
-        // Linux
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        // macOS
-        "/System/Library/Fonts/SFNS.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-    ];
-
-    for path in proportional_candidates {
-        if let Ok(data) = std::fs::read(path) {
-            fonts.font_data.insert(
-                "system_proportional".to_owned(),
-                egui::FontData::from_owned(data),
-            );
-            if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
-                family.insert(0, "system_proportional".to_owned());
-            }
-            break;
-        }
-    }
-
-    // Check system monospace fonts
-    let mono_candidates = [
-        // Windows
-        "C:\\Windows\\Fonts\\cascadiamono.ttf",
-        "C:\\Windows\\Fonts\\consola.ttf",
-        // Linux
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-        // macOS
-        "/System/Library/Fonts/Menlo.ttc",
-    ];
-
-    for path in mono_candidates {
-        if let Ok(data) = std::fs::read(path) {
-            fonts
-                .font_data
-                .insert("system_mono".to_owned(), egui::FontData::from_owned(data));
-            if let Some(family) = fonts.families.get_mut(&FontFamily::Monospace) {
-                family.insert(0, "system_mono".to_owned());
-            }
-            break;
-        }
-    }
-
-    ctx.set_fonts(fonts);
-
-    // Apply clean typographic scales and layout spacing
+    // Apply clean typographic scales and layout spacing using egui built-in fonts
     ctx.style_mut(|style| {
         style.text_styles = [
             (

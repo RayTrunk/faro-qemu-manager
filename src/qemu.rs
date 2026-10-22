@@ -1,11 +1,10 @@
 use crate::config::{Accelerator, Arch, DriveFormat, VmConfig};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Sender, TryRecvError};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 /// Resolve the accelerator string passed to QEMU.
 /// If `Accelerator::Auto`, picks WHPX on Windows, KVM on Linux, and TCG as fallback.
@@ -391,13 +390,29 @@ pub enum QemuEvent {
     Error(String),
 }
 
+/// Terminate a process by operating system process ID
+fn kill_pid(pid: u32) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/F", "/PID", &pid.to_string()]);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = cmd.status();
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        Ok(())
+    }
+}
+
 /// Handle to a running virtual machine process.
 pub struct VmProcess {
     /// Operating system process ID of the child process.
     pub pid: u32,
-    /// Channel to signal process termination to supervisor.
-    pub kill_tx: Sender<()>,
-    child: Arc<Mutex<Child>>,
     alive: Arc<AtomicBool>,
 }
 
@@ -418,15 +433,6 @@ impl VmProcess {
 
     /// Check if the virtual machine process is currently running.
     pub fn is_alive(&self) -> bool {
-        if !self.alive.load(Ordering::SeqCst) {
-            return false;
-        }
-        if let Ok(mut guard) = self.child.try_lock() {
-            if let Ok(Some(_status)) = guard.try_wait() {
-                self.alive.store(false, Ordering::SeqCst);
-                return false;
-            }
-        }
         self.alive.load(Ordering::SeqCst)
     }
 
@@ -435,15 +441,8 @@ impl VmProcess {
         if !self.is_alive() {
             return Ok(());
         }
-        let mut guard = self.child.lock().map_err(|e| e.to_string())?;
-        if let Ok(Some(_)) = guard.try_wait() {
-            self.alive.store(false, Ordering::SeqCst);
-            return Ok(());
-        }
-        let res = guard.kill().map_err(|e| e.to_string());
         self.alive.store(false, Ordering::SeqCst);
-        let _ = self.kill_tx.send(());
-        res
+        kill_pid(self.pid)
     }
 }
 
@@ -545,64 +544,20 @@ pub fn spawn_qemu(
         None
     };
 
-    let (kill_tx, kill_rx) = channel();
-    let child_arc = Arc::new(Mutex::new(child));
     let alive = Arc::new(AtomicBool::new(true));
-
-    let sup_child = Arc::clone(&child_arc);
     let sup_alive = Arc::clone(&alive);
     let sup_tx = event_tx;
 
     std::thread::Builder::new()
         .name("qemu-supervisor".to_string())
         .spawn(move || {
-            let mut exit_code = None;
-            loop {
-                // 1. Check if kill signal was received
-                match kill_rx.try_recv() {
-                    Ok(()) => {
-                        if let Ok(mut guard) = sup_child.lock() {
-                            let _ = guard.kill();
-                            if let Ok(status) = guard.wait() {
-                                exit_code = status.code();
-                            }
-                        }
-                        break;
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        // VmProcess was dropped; wait for child process to finish
-                        if let Ok(mut guard) = sup_child.lock() {
-                            if let Ok(status) = guard.wait() {
-                                exit_code = status.code();
-                            }
-                        }
-                        break;
-                    }
-                    Err(TryRecvError::Empty) => {}
+            let exit_code = match child.wait() {
+                Ok(status) => status.code(),
+                Err(e) => {
+                    let _ = sup_tx.send(QemuEvent::Error(format!("Wait error: {}", e)));
+                    None
                 }
-
-                // 2. Check if process exited on its own
-                let finished = match sup_child.lock() {
-                    Ok(mut guard) => match guard.try_wait() {
-                        Ok(Some(status)) => {
-                            exit_code = status.code();
-                            true
-                        }
-                        Ok(None) => false,
-                        Err(e) => {
-                            let _ = sup_tx.send(QemuEvent::Error(e.to_string()));
-                            true
-                        }
-                    },
-                    Err(_) => true,
-                };
-
-                if finished {
-                    break;
-                }
-
-                std::thread::sleep(Duration::from_millis(15));
-            }
+            };
 
             // Ensure stdout and stderr reader threads finish streaming before Exited event
             if let Some(h) = stdout_handle {
@@ -615,17 +570,7 @@ pub fn spawn_qemu(
             sup_alive.store(false, Ordering::SeqCst);
             let _ = sup_tx.send(QemuEvent::Exited(exit_code));
         })
-        .map_err(|e| {
-            if let Ok(mut guard) = child_arc.lock() {
-                let _ = guard.kill();
-            }
-            format!("Failed to spawn supervisor thread: {}", e)
-        })?;
+        .map_err(|e| format!("Failed to spawn supervisor thread: {}", e))?;
 
-    Ok(VmProcess {
-        pid,
-        kill_tx,
-        child: child_arc,
-        alive,
-    })
+    Ok(VmProcess { pid, alive })
 }

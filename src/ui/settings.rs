@@ -265,13 +265,3 @@ impl<'a> SettingsDialog<'a> {
         modified
     }
 }
-
-/// Helper function to render the settings dialog
-pub fn render_settings_dialog(
-    ctx: &Context,
-    open: &mut bool,
-    settings: &mut AppSettings,
-    i18n: &mut I18n,
-) -> bool {
-    SettingsDialog::new(open, settings, i18n).show(ctx)
-}

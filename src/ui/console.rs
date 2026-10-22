@@ -601,34 +601,3 @@ impl<'a> ConsoleView<'a> {
         action
     }
 }
-
-/// Helper function to render console view with full parameters
-pub fn render_console(
-    ui: &mut Ui,
-    logs: &mut ConsoleLogBuffer,
-    is_running: bool,
-    pid: Option<u32>,
-    exit_code: Option<Option<i32>>,
-    cli_command: Option<&str>,
-    i18n: &I18n,
-) -> Option<ConsoleAction> {
-    ConsoleView {
-        logs,
-        is_running,
-        pid,
-        exit_code,
-        cli_command,
-        i18n,
-    }
-    .show(ui)
-}
-
-/// Helper function to render console view with minimal parameters
-pub fn render_console_simple(
-    ui: &mut Ui,
-    logs: &mut ConsoleLogBuffer,
-    is_running: bool,
-    i18n: &I18n,
-) -> Option<ConsoleAction> {
-    ConsoleView::new(logs, i18n).is_running(is_running).show(ui)
-}

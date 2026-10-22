@@ -8,7 +8,6 @@ use faro_qem::ui::*;
 fn test_theme_colors() {
     assert_eq!(COLOR_RUNNING, Color32::from_rgb(46, 204, 113));
     assert_eq!(COLOR_STOPPED, Color32::from_rgb(149, 165, 166));
-    assert_eq!(COLOR_PAUSED, Color32::from_rgb(243, 156, 18));
     assert_eq!(COLOR_ERROR, Color32::from_rgb(231, 76, 60));
     assert_eq!(COLOR_PRIMARY, Color32::from_rgb(41, 128, 185));
     assert_eq!(COLOR_PRIMARY_HOVER, Color32::from_rgb(52, 152, 219));
@@ -20,7 +19,6 @@ fn test_theme_colors() {
 fn test_icons_constants() {
     assert_eq!(icons::PLAY, "\u{25B6}");
     assert_eq!(icons::STOP, "\u{23F9}");
-    assert_eq!(icons::PAUSE, "\u{23F8}");
     assert_eq!(icons::SETTINGS, "\u{2699}");
     assert_eq!(icons::ADD, "\u{2795}");
     assert_eq!(icons::VM, "\u{1F5A5}");
@@ -158,7 +156,6 @@ fn test_status_badge_rendering() {
         egui::CentralPanel::default().show(ctx, |ui| {
             status_badge(ui, "Running", COLOR_RUNNING);
             status_badge(ui, "Stopped", COLOR_STOPPED);
-            status_badge(ui, "Paused", COLOR_PAUSED);
             status_badge(ui, "Error", COLOR_ERROR);
 
             let resp = status_badge_interactive(ui, "Interactive", COLOR_PRIMARY);

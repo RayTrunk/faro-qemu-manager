@@ -6,8 +6,8 @@ use faro_qem::config::{Arch, VmConfig};
 use faro_qem::i18n::I18n;
 use faro_qem::qemu::QemuEvent;
 use faro_qem::ui::{
-    current_timestamp, render_console, render_console_simple, strip_ansi_codes, ConsoleAction,
-    ConsoleLogBuffer, ConsoleView, CreateDiskState, DetailTab, LogEntry, LogLevel, VmDetailView,
+    current_timestamp, strip_ansi_codes, ConsoleAction, ConsoleLogBuffer, ConsoleView,
+    CreateDiskState, DetailTab, LogEntry, LogLevel, VmDetailView,
 };
 
 #[test]
@@ -222,7 +222,11 @@ fn test_console_view_with_logs_and_cli_preview() {
 
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let action = render_console(ui, &mut logs, true, Some(12345), None, Some(cmd), &i18n);
+            let action = ConsoleView::new(&mut logs, &i18n)
+                .is_running(true)
+                .pid(Some(12345))
+                .cli_command(Some(cmd))
+                .show(ui);
             assert_eq!(action, None);
         });
     });
@@ -230,8 +234,11 @@ fn test_console_view_with_logs_and_cli_preview() {
     // Verify exit code status rendering (code 0)
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let action =
-                render_console(ui, &mut logs, false, None, Some(Some(0)), Some(cmd), &i18n);
+            let action = ConsoleView::new(&mut logs, &i18n)
+                .is_running(false)
+                .exit_code(Some(Some(0)))
+                .cli_command(Some(cmd))
+                .show(ui);
             assert_eq!(action, None);
         });
     });
@@ -239,15 +246,11 @@ fn test_console_view_with_logs_and_cli_preview() {
     // Verify non-zero exit code rendering (code 139 segfault)
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let action = render_console(
-                ui,
-                &mut logs,
-                false,
-                None,
-                Some(Some(139)),
-                Some(cmd),
-                &i18n,
-            );
+            let action = ConsoleView::new(&mut logs, &i18n)
+                .is_running(false)
+                .exit_code(Some(Some(139)))
+                .cli_command(Some(cmd))
+                .show(ui);
             assert_eq!(action, None);
         });
     });
@@ -267,7 +270,9 @@ fn test_console_view_search_filter() {
 
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let action = render_console_simple(ui, &mut logs, false, &i18n);
+            let action = ConsoleView::new(&mut logs, &i18n)
+                .is_running(false)
+                .show(ui);
             assert_eq!(action, None);
         });
     });
@@ -285,7 +290,9 @@ fn test_console_view_locales() {
         let i18n = I18n::new(locale);
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let action = render_console_simple(ui, &mut logs, false, &i18n);
+                let action = ConsoleView::new(&mut logs, &i18n)
+                    .is_running(false)
+                    .show(ui);
                 assert_eq!(action, None);
             });
         });

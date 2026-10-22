@@ -9,7 +9,7 @@ use faro_qem::config::{
     Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, PortForwardRule, VmConfig,
 };
 use faro_qem::i18n::I18n;
-use faro_qem::ui::{render_vm_detail, CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
+use faro_qem::ui::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
 
 #[test]
 fn test_vm_detail_action_variants_and_helpers() {
@@ -311,24 +311,24 @@ fn test_create_disk_modal_validation_and_rendering() {
 }
 
 #[test]
-fn test_render_vm_detail_wrapper_function() {
+fn test_vm_detail_direct_rendering() {
     let ctx = Context::default();
     let i18n = I18n::new("de");
-    let mut vm = VmConfig::new_default("Wrapper Test VM", Arch::Riscv64);
+    let mut vm = VmConfig::new_default("Direct View Test VM", Arch::Riscv64);
     let mut active_tab = DetailTab::System;
     let mut disk_modal = CreateDiskState::default();
 
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let action = render_vm_detail(
-                ui,
+            let action = VmDetailView::new(
                 &mut vm,
                 false,
                 &i18n,
                 &mut active_tab,
                 None,
                 &mut disk_modal,
-            );
+            )
+            .show(ui);
             assert_eq!(action, None);
         });
     });
