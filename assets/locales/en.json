@@ -1,0 +1,18 @@
+{
+  "app_title": "FARO QEM",
+  "app_copyright": "(C) R.Trunk 2026",
+  "new_vm": "New VM",
+  "duplicate": "Duplicate",
+  "delete": "Delete",
+  "settings": "Settings",
+  "launch": "Launch VM",
+  "stop": "Force Stop",
+  "save": "Save Profile",
+  "status_stopped": "Stopped",
+  "status_running": "Running",
+  "tab_system": "System & Hardware",
+  "tab_storage": "Storage & Media",
+  "tab_display": "Display & Graphics",
+  "tab_network": "Network & Advanced",
+  "tab_console": "Live Console"
+}

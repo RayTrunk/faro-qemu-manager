@@ -1,0 +1,19 @@
+[package]
+name = "faro-qem"
+version = "0.1.0"
+edition = "2021"
+authors = ["R.Trunk"]
+description = "FARO QEM (C) R.Trunk 2026 - Modern QEMU GUI in Rust"
+
+[dependencies]
+eframe = { version = "0.29.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.29.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+rfd = "0.15"
+shell-words = "1.1"
+directories = "5.0"
+
+[dev-dependencies]
+tempfile = "3.12"
