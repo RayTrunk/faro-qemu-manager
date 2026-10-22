@@ -49,7 +49,7 @@ impl<'a> SettingsDialog<'a> {
             .open(&mut is_open)
             .resizable(false)
             .collapsible(false)
-            .default_width(460.0)
+            .default_size(egui::vec2(480.0, 360.0))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]);
 
         window.show(ctx, |ui| {
@@ -250,10 +250,12 @@ impl<'a> SettingsDialog<'a> {
             ui.add_space(6.0);
 
             // 5. Close Button
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(self.i18n.t("close")).clicked() {
-                    close_requested = true;
-                }
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(self.i18n.t("close")).clicked() {
+                        close_requested = true;
+                    }
+                });
             });
         });
 

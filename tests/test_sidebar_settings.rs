@@ -207,6 +207,56 @@ fn test_settings_dialog_closed_does_not_render() {
 }
 
 #[test]
+fn test_settings_dialog_window_growth() {
+    let ctx = Context::default();
+    let mut i18n = I18n::new("en");
+    let mut settings = AppSettings::default();
+    let mut open = true;
+
+    let mut heights = Vec::new();
+    let mut widths = Vec::new();
+
+    for _frame in 0..10 {
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1120.0, 720.0),
+            )),
+            ..Default::default()
+        };
+
+        let _ = ctx.run(raw_input, |ctx| {
+            let mut dialog = SettingsDialog::new(&mut open, &mut settings, &mut i18n);
+            dialog.show(ctx);
+        });
+
+        let bb = ctx.used_rect();
+        widths.push(bb.width());
+        heights.push(bb.height());
+    }
+
+    // Verify window width and height are stable and do not continuously grow across frames
+    if widths.len() >= 2 {
+        let first_w = widths[1];
+        let last_w = *widths.last().unwrap();
+        assert!(
+            (last_w - first_w).abs() < 5.0,
+            "Settings window width grew from {} to {}",
+            first_w,
+            last_w
+        );
+
+        let first_h = heights[1];
+        let last_h = *heights.last().unwrap();
+        assert!(
+            (last_h - first_h).abs() < 5.0,
+            "Settings window height grew from {} to {}",
+            first_h,
+            last_h
+        );
+    }
+}
+#[test]
 fn test_settings_dialog_open_rendering() {
     let ctx = Context::default();
     let mut i18n = I18n::new("en");
