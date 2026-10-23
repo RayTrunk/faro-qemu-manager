@@ -6,7 +6,7 @@ use std::sync::mpsc;
 use tempfile::tempdir;
 
 use faro_qem::app::FaroQemApp;
-use faro_qem::config::{load_settings, load_vms, Accelerator, Arch};
+use faro_qem::config::{load_settings, load_vms, Accelerator, Arch, Firmware, VmConfig};
 use faro_qem::qemu::{spawn_qemu, QemuEvent};
 use faro_qem::ui::console::LogLevel;
 use faro_qem::ui::sidebar::{SidebarAction, VmStatus};
@@ -343,4 +343,97 @@ fn test_faro_qem_app_settings_dialog_save_and_reload() {
     assert_eq!(fresh_app.settings.theme, "light");
     assert_eq!(fresh_app.settings.language, "de");
     assert_eq!(fresh_app.settings.default_arch, Arch::Aarch64);
+}
+
+// --------------------------------------------------------------------------
+// Firmware: a UEFI machine the user ticked must be able to start
+// --------------------------------------------------------------------------
+
+/// A directory shaped like a portable QEMU install, firmware included.
+///
+/// The two file names are the ones `find_uefi_firmware` looks for; the
+/// contents do not matter here, only that the pair is found and copied.
+fn portable_qemu_dir(root: &std::path::Path) -> std::path::PathBuf {
+    let share = root.join("share");
+    std::fs::create_dir_all(&share).unwrap();
+    std::fs::write(share.join("edk2-x86_64-code.fd"), b"CODE").unwrap();
+    std::fs::write(share.join("edk2-i386-vars.fd"), b"VARS").unwrap();
+    root.to_path_buf()
+}
+
+fn app_with_qemu_dir(dir: &std::path::Path) -> FaroQemApp {
+    let mut app = FaroQemApp::with_paths(dir.join("settings.json"), dir.join("vms.json"), None);
+    app.settings.qemu_dir = Some(portable_qemu_dir(&dir.join("qemu")));
+    app.refresh_capabilities();
+    app
+}
+
+#[test]
+fn test_firmware_is_found_in_the_configured_qemu_directory() {
+    let dir = tempdir().unwrap();
+    let app = app_with_qemu_dir(dir.path());
+    let found = app
+        .uefi_firmware
+        .as_ref()
+        .expect("a portable QEMU outside PATH still has its firmware beside it");
+    // Without this the test would pass on the firmware of the system QEMU,
+    // which is the very fallback that made a UEFI machine boot as BIOS.
+    assert!(
+        found.code.starts_with(dir.path()),
+        "the configured directory must win, got: {}",
+        found.code.display()
+    );
+}
+
+#[test]
+fn test_starting_a_uefi_vm_creates_the_variable_store_it_needs() {
+    let dir = tempdir().unwrap();
+    let app = app_with_qemu_dir(dir.path());
+
+    let nvram = dir.path().join("win11").join("nvram.fd");
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.firmware = Firmware::Uefi {
+        nvram: nvram.clone(),
+    };
+
+    app.ensure_nvram(&vm).expect("the store is ours to create");
+    assert!(
+        nvram.is_file(),
+        "without this file QEMU answers: could not open {}: file not found",
+        nvram.display()
+    );
+    assert_eq!(std::fs::read(&nvram).unwrap(), b"VARS");
+
+    // A second start must not wipe the boot entries the guest wrote.
+    std::fs::write(&nvram, b"GUEST BOOT ENTRIES").unwrap();
+    app.ensure_nvram(&vm).unwrap();
+    assert_eq!(std::fs::read(&nvram).unwrap(), b"GUEST BOOT ENTRIES");
+}
+
+#[test]
+fn test_a_uefi_vm_is_refused_when_no_firmware_was_found() {
+    let dir = tempdir().unwrap();
+    let mut app = FaroQemApp::with_paths(
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+        None,
+    );
+    // What a machine without any edk2 files looks like. It cannot be staged
+    // through the settings: with no binary in the configured directory the
+    // search falls back to the system QEMU, and finds its firmware.
+    app.uefi_firmware = None;
+
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.firmware = Firmware::Uefi {
+        nvram: dir.path().join("nvram.fd"),
+    };
+
+    let err = app
+        .ensure_nvram(&vm)
+        .expect_err("a UEFI machine with no firmware must not quietly boot as BIOS");
+    assert!(
+        err.to_lowercase().contains("uefi"),
+        "the message must name what is missing, got: {}",
+        err
+    );
 }

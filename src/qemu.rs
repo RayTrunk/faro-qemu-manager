@@ -672,7 +672,23 @@ pub fn build_firmware_args(fw: &Firmware, uefi: Option<&UefiFirmware>) -> Vec<St
 }
 
 /// Construct command-line arguments to launch QEMU for the given `VmConfig`.
-pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
+///
+/// `uefi` is the firmware pair the caller resolved, which is also how the
+/// configured QEMU directory reaches this function. Searching for it here
+/// would hide filesystem work inside an argument builder and — worse — would
+/// miss a portable QEMU, leaving a UEFI machine to start as BIOS.
+///
+/// A UEFI machine without firmware is refused rather than built: a guest
+/// installed under BIOS can never boot again once the firmware is found, so
+/// the quiet fallback destroys exactly the installation it was meant to save.
+pub fn build_qemu_args(vm: &VmConfig, uefi: Option<&UefiFirmware>) -> Result<Vec<String>, String> {
+    if matches!(vm.firmware, Firmware::Uefi { .. }) && uefi.is_none() {
+        return Err(format!(
+            "No UEFI firmware found for {}. Starting this machine as BIOS would              install a guest that can never boot again, so the launch is refused.              Set the QEMU directory in the settings.",
+            vm.name
+        ));
+    }
+
     let mut args = Vec::new();
 
     // 1. Machine and accelerator
@@ -716,10 +732,7 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
     args.extend(build_cdrom_args(&vm.cdroms, &mut ide));
 
     // 6. Firmware
-    args.extend(build_firmware_args(
-        &vm.firmware,
-        find_uefi_firmware(None).as_ref(),
-    ));
+    args.extend(build_firmware_args(&vm.firmware, uefi));
 
     // 7. Display and VGA
     let vga_type = vm.display.vga_type.trim();
@@ -778,7 +791,7 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
         }
     }
 
-    args
+    Ok(args)
 }
 
 /// Create a new virtual disk image using `qemu-img create`.

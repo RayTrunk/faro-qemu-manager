@@ -9,12 +9,12 @@ use uuid::Uuid;
 use crate::config::{
     default_settings_path, default_vms_path, quarantine_file, recovery_for, save_settings,
     save_vms, try_load_settings, try_load_vms, AppSettings, ConfigLoadError, ConfigRecovery,
-    VmConfig,
+    Firmware, VmConfig,
 };
 use crate::i18n::I18n;
 use crate::qemu::{
-    build_qemu_args, find_qemu_binary, find_qemu_img, probe_capabilities, spawn_qemu,
-    QemuCapabilities, QemuEvent, VmProcess,
+    build_qemu_args, find_qemu_binary, find_qemu_img, find_uefi_firmware, prepare_nvram,
+    probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent, UefiFirmware, VmProcess,
 };
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
@@ -50,9 +50,13 @@ pub struct FaroQemApp {
     /// Same barrier for the settings file.
     pub settings_write_blocked: bool,
     /// What the installed QEMU can do. Probed when the directory is chosen or
-    /// changed and then kept — four processes is not something to spawn while
+    /// changed and then kept — five processes is not something to spawn while
     /// drawing a frame.
     pub capabilities: QemuCapabilities,
+    /// The UEFI firmware pair beside the QEMU in use, resolved at the same
+    /// time as the capabilities. Searching for it is a handful of `is_file`
+    /// calls, which is fine once and wrong once per frame.
+    pub uefi_firmware: Option<UefiFirmware>,
 }
 
 /// Short, human-facing name for a configuration path.
@@ -207,6 +211,7 @@ impl FaroQemApp {
         let capabilities = find_qemu_binary(settings.qemu_dir.as_deref(), settings.default_arch)
             .map(|bin| probe_capabilities(&bin))
             .unwrap_or_default();
+        let uefi_firmware = find_uefi_firmware(settings.qemu_dir.as_deref());
 
         let logo_texture = ctx.and_then(|c| {
             crate::ui::theme::load_app_logo()
@@ -240,17 +245,44 @@ impl FaroQemApp {
             vms_write_blocked,
             settings_write_blocked,
             capabilities,
+            uefi_firmware,
         }
     }
 
     /// Re-ask QEMU what it can do, after the directory or architecture changed.
-    fn refresh_capabilities(&mut self) {
+    ///
+    /// The firmware search travels with it: both answers depend on which QEMU
+    /// is in use, and both are too expensive to repeat while drawing.
+    pub fn refresh_capabilities(&mut self) {
         self.capabilities = find_qemu_binary(
             self.settings.qemu_dir.as_deref(),
             self.settings.default_arch,
         )
         .map(|bin| probe_capabilities(&bin))
         .unwrap_or_default();
+        self.uefi_firmware = find_uefi_firmware(self.settings.qemu_dir.as_deref());
+    }
+
+    /// Make sure a UEFI machine has the variable store QEMU demands.
+    ///
+    /// The UI only records where the store belongs; this is what puts it
+    /// there. It runs on every start, not just when UEFI is chosen, because
+    /// the file can go missing between sessions — and QEMU's answer to a
+    /// missing one is a refusal to start, not a fresh store.
+    ///
+    /// An existing store is left exactly as it is: it holds the boot entries
+    /// the guest wrote, and overwriting them loses the installed system.
+    pub fn ensure_nvram(&self, vm: &VmConfig) -> Result<(), String> {
+        let Firmware::Uefi { nvram } = &vm.firmware else {
+            return Ok(());
+        };
+        let Some(firmware) = self.uefi_firmware.as_ref() else {
+            return Err(format!(
+                "No UEFI firmware found for {}. Starting this machine as BIOS would                  install a guest that can never boot again, so the launch is refused.                  Set the QEMU directory in the settings.",
+                vm.name
+            ));
+        };
+        prepare_nvram(&firmware.vars_template, nvram)
     }
 
     /// Add a notice, unless the very same message is already on screen.
@@ -392,7 +424,22 @@ impl FaroQemApp {
             }
         };
 
-        let args = build_qemu_args(&vm);
+        if let Err(err_msg) = self.ensure_nvram(&vm) {
+            self.status_map.insert(id, VmStatus::Error(err_msg.clone()));
+            let log_buf = self.console_logs.entry(id).or_default();
+            log_buf.push_error(&err_msg);
+            return Err(err_msg);
+        }
+
+        let args = match build_qemu_args(&vm, self.uefi_firmware.as_ref()) {
+            Ok(args) => args,
+            Err(err_msg) => {
+                self.status_map.insert(id, VmStatus::Error(err_msg.clone()));
+                let log_buf = self.console_logs.entry(id).or_default();
+                log_buf.push_error(&err_msg);
+                return Err(err_msg);
+            }
+        };
         let cli_str = format!("{} {}", bin_path.display(), shell_words::join(&args));
         self.cli_previews.insert(id, cli_str);
 

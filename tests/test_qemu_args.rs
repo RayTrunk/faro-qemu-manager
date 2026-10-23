@@ -22,7 +22,7 @@ fn test_build_qemu_args_basic() {
     vm.accel = Accelerator::TCG;
     vm.extra_args = "-usb -device usb-tablet".to_string();
 
-    let args = build_qemu_args(&vm);
+    let args = build_qemu_args(&vm, None).expect("a BIOS machine needs no firmware");
     assert!(args.contains(&"-m".to_string()));
     assert!(args.contains(&"4096M".to_string()));
     assert!(args.contains(&"-smp".to_string()));
@@ -48,7 +48,7 @@ fn test_build_qemu_args_drives_and_net() {
         proto: "tcp".to_string(),
     });
 
-    let args = build_qemu_args(&vm);
+    let args = build_qemu_args(&vm, None).expect("a BIOS machine needs no firmware");
     let joined = args.join(" ");
     assert!(joined.contains("format=qcow2"));
     assert!(joined.contains("hostfwd=tcp::8080-:80"));
@@ -73,7 +73,7 @@ fn test_build_qemu_args_all_components() {
         fullscreen: true,
     };
 
-    let args = build_qemu_args(&vm);
+    let args = build_qemu_args(&vm, None).expect("a BIOS machine needs no firmware");
     let joined = args.join(" ");
     assert!(joined.contains("-machine virt,accel=tcg"));
     assert!(joined.contains("-cpu cortex-a72"));
@@ -91,7 +91,7 @@ fn test_build_qemu_args_all_components() {
 #[test]
 fn test_build_qemu_args_accel_auto() {
     let vm = VmConfig::new_default("Auto Accel VM", Arch::X86_64);
-    let args = build_qemu_args(&vm);
+    let args = build_qemu_args(&vm, None).expect("a BIOS machine needs no firmware");
     let joined = args.join(" ");
 
     #[cfg(target_os = "windows")]
@@ -161,7 +161,7 @@ fn test_build_qemu_args_none_flags() {
     vm.display.vga_type = "none".to_string();
     vm.network.backend = "none".to_string();
 
-    let args = build_qemu_args(&vm);
+    let args = build_qemu_args(&vm, None).expect("a BIOS machine needs no firmware");
     let joined = args.join(" ");
 
     assert!(
@@ -205,7 +205,7 @@ fn test_find_qemu_binary_file_candidate_name_filtering() {
 #[test]
 fn test_build_qemu_args_mouse_tablet_and_show_cursor() {
     let vm = VmConfig::new_default("Debian Desktop", Arch::X86_64);
-    let args = build_qemu_args(&vm);
+    let args = build_qemu_args(&vm, None).expect("a BIOS machine needs no firmware");
     let joined = args.join(" ");
 
     assert!(
@@ -505,4 +505,16 @@ fn test_uefi_without_discovered_firmware_emits_nothing_rather_than_falling_back(
         build_firmware_args(&fw, None).is_empty(),
         "a UEFI VM must not quietly start as BIOS; the start check reports the missing firmware"
     );
+}
+
+#[test]
+fn test_a_uefi_machine_without_firmware_is_refused_not_built_as_bios() {
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.firmware = Firmware::Uefi {
+        nvram: PathBuf::from("nvram.fd"),
+    };
+    let err = build_qemu_args(&vm, None)
+        .expect_err("a quiet BIOS fallback installs a guest that can never boot again");
+    assert!(err.contains("UEFI"), "got: {}", err);
+    assert!(err.contains("Windows 11"), "name the machine, got: {}", err);
 }

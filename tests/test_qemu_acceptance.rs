@@ -11,6 +11,13 @@ mod common;
 /// Acceptance is about the arguments, not the sizing.
 const PROBE_MEMORY_MB: u32 = 128;
 
+/// The arguments for `vm`, with whatever firmware this machine happens to
+/// have. `build_qemu_args` takes the firmware as a parameter so that a
+/// portable QEMU is not missed; the tests pass the real one.
+fn args_for(vm: &VmConfig) -> Vec<String> {
+    build_qemu_args(vm, find_uefi_firmware(None).as_ref()).expect("arguments were built")
+}
+
 use common::{qemu_accepts, Acceptance};
 use faro_qem::config::{Arch, DriveConfig, DriveFormat, DriveInterface, Firmware, VmConfig};
 use faro_qem::qemu::{
@@ -62,7 +69,7 @@ fn test_qemu_accepts_every_drive_interface() {
             boot_index: None,
         });
 
-        common::assert_accepted(iface.as_str(), Arch::X86_64, &build_qemu_args(&vm));
+        common::assert_accepted(iface.as_str(), Arch::X86_64, &args_for(&vm));
     }
 }
 
@@ -87,7 +94,7 @@ fn test_qemu_accepts_two_isos_alongside_a_disk() {
     vm.cdroms.push(a);
     vm.cdroms.push(b);
 
-    common::assert_accepted("two ISOs + disk", Arch::X86_64, &build_qemu_args(&vm));
+    common::assert_accepted("two ISOs + disk", Arch::X86_64, &args_for(&vm));
 }
 
 #[test]
@@ -103,7 +110,7 @@ fn test_qemu_accepts_user_networking_with_two_port_forwards() {
             proto: "tcp".to_string(),
         });
     }
-    common::assert_accepted("user + 2 forwards", Arch::X86_64, &build_qemu_args(&vm));
+    common::assert_accepted("user + 2 forwards", Arch::X86_64, &args_for(&vm));
 }
 
 // Review Focus 5
@@ -157,7 +164,7 @@ fn test_qemu_accepts_a_uefi_machine() {
         boot_index: None,
     });
 
-    common::assert_accepted("uefi + sata", Arch::X86_64, &build_qemu_args(&vm));
+    common::assert_accepted("uefi + sata", Arch::X86_64, &args_for(&vm));
 }
 
 // --------------------------------------------------------------------------
@@ -185,7 +192,7 @@ fn test_qemu_accepts_every_vga_type() {
     let dir = tempfile::tempdir().unwrap();
     for vga in ["virtio-vga", "std", "qxl", "cirrus", "none"] {
         let vm = probe_vm(dir.path(), |vm| vm.display.vga_type = vga.to_string());
-        common::assert_accepted(vga, Arch::X86_64, &build_qemu_args(&vm));
+        common::assert_accepted(vga, Arch::X86_64, &args_for(&vm));
     }
 }
 
@@ -194,7 +201,7 @@ fn test_qemu_accepts_every_nic_model() {
     let dir = tempfile::tempdir().unwrap();
     for nic in ["virtio-net-pci", "e1000", "rtl8139", "e1000e", "vmxnet3"] {
         let vm = probe_vm(dir.path(), |vm| vm.network.nic_model = nic.to_string());
-        common::assert_accepted(nic, Arch::X86_64, &build_qemu_args(&vm));
+        common::assert_accepted(nic, Arch::X86_64, &args_for(&vm));
     }
 }
 
@@ -209,7 +216,7 @@ fn test_qemu_accepts_every_offered_network_backend() {
 
     for backend in offered_netdev_backends(Some(&caps)) {
         let vm = probe_vm(dir.path(), |vm| vm.network.backend = backend.to_string());
-        common::assert_accepted(backend, Arch::X86_64, &build_qemu_args(&vm));
+        common::assert_accepted(backend, Arch::X86_64, &args_for(&vm));
     }
 }
 
@@ -228,7 +235,7 @@ fn test_qemu_accepts_every_drive_format() {
             interface: DriveInterface::VirtIO,
             boot_index: None,
         });
-        common::assert_accepted(format.as_str(), Arch::X86_64, &build_qemu_args(&vm));
+        common::assert_accepted(format.as_str(), Arch::X86_64, &args_for(&vm));
     }
 }
 
@@ -243,7 +250,7 @@ fn test_qemu_accepts_every_offered_machine_type() {
 
     for machine in offered_machine_types(Arch::X86_64, Some(&caps)) {
         let vm = probe_vm(dir.path(), |vm| vm.machine_type = machine.to_string());
-        common::assert_accepted(machine, Arch::X86_64, &build_qemu_args(&vm));
+        common::assert_accepted(machine, Arch::X86_64, &args_for(&vm));
     }
 }
 
@@ -274,7 +281,7 @@ fn test_every_offered_display_backend_is_one_qemu_knows() {
     let vm = probe_vm(dir.path(), |vm| {
         vm.display.display_backend = "default".to_string()
     });
-    common::assert_accepted("display=default", Arch::X86_64, &build_qemu_args(&vm));
+    common::assert_accepted("display=default", Arch::X86_64, &args_for(&vm));
 }
 
 // --------------------------------------------------------------------------
@@ -317,7 +324,7 @@ fn test_qemu_accepts_one_two_and_three_disks_of_every_interface() {
             common::assert_accepted(
                 &format!("{} x{}", iface.as_str(), count),
                 Arch::X86_64,
-                &build_qemu_args(&vm),
+                &args_for(&vm),
             );
         }
     }
@@ -332,7 +339,7 @@ fn test_qemu_accepts_a_boot_index_on_every_interface() {
             common::assert_accepted(
                 &format!("{} x{} boot-indexed", iface.as_str(), count),
                 Arch::X86_64,
-                &build_qemu_args(&vm),
+                &args_for(&vm),
             );
         }
     }
@@ -352,7 +359,7 @@ fn test_qemu_accepts_ide_disks_alongside_isos() {
             common::assert_accepted(
                 &format!("{} IDE disks + {} ISOs", disks, isos),
                 Arch::X86_64,
-                &build_qemu_args(&vm),
+                &args_for(&vm),
             );
         }
     }
@@ -379,7 +386,7 @@ fn test_qemu_accepts_a_path_with_a_space_and_a_comma() {
     });
     vm.cdroms.push(iso);
 
-    common::assert_accepted("comma path", Arch::X86_64, &build_qemu_args(&vm));
+    common::assert_accepted("comma path", Arch::X86_64, &args_for(&vm));
 }
 
 /// The IDE bus arithmetic differs between the AHCI controller of q35 and the
@@ -399,7 +406,7 @@ fn test_qemu_accepts_boot_indexed_ide_disks_on_both_x86_machines() {
             common::assert_accepted(
                 &format!("{}: {} boot-indexed IDE disks + ISO", machine, disks),
                 Arch::X86_64,
-                &build_qemu_args(&vm),
+                &args_for(&vm),
             );
         }
     }
