@@ -2,12 +2,14 @@
 // UI module
 
 pub mod console;
+pub mod notice;
 pub mod settings;
 pub mod sidebar;
 pub mod theme;
 pub mod vm_detail;
 
 pub use console::*;
+pub use notice::*;
 pub use settings::*;
 pub use sidebar::*;
 pub use theme::*;

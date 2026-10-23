@@ -3,6 +3,9 @@ Cargo.lock
 *.tmp
 vms.json
 settings.json
+# Quarantined configurations are the user's data, never ours to commit
+*.corrupt-*
 *.qcow2
 *.img
 FLUX-*.jpeg
+.superpowers/

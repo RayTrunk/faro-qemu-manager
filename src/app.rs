@@ -7,14 +7,16 @@ use std::sync::mpsc;
 use uuid::Uuid;
 
 use crate::config::{
-    default_settings_path, default_vms_path, load_settings, load_vms, save_settings, save_vms,
-    AppSettings, VmConfig,
+    default_settings_path, default_vms_path, quarantine_file, recovery_for, save_settings,
+    save_vms, try_load_settings, try_load_vms, AppSettings, ConfigLoadError, ConfigRecovery,
+    VmConfig,
 };
 use crate::i18n::I18n;
 use crate::qemu::{
     build_qemu_args, find_qemu_binary, find_qemu_img, spawn_qemu, QemuEvent, VmProcess,
 };
 use crate::ui::console::ConsoleLogBuffer;
+use crate::ui::notice::{Notice, NoticeBar};
 use crate::ui::settings::SettingsDialog;
 use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
 use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
@@ -39,6 +41,91 @@ pub struct FaroQemApp {
     pub cli_previews: HashMap<Uuid, String>,
     pub confirming_delete_id: Option<Uuid>,
     pub logo_texture: Option<egui::TextureHandle>,
+    /// Problems the user needs to know about, shown as a band above the menu.
+    pub notices: Vec<Notice>,
+    /// The VM list on disk could not be read and is still sitting there.
+    /// Writing to it would destroy it, so every save to that path is refused.
+    pub vms_write_blocked: bool,
+    /// Same barrier for the settings file.
+    pub settings_write_blocked: bool,
+}
+
+/// Short, human-facing name for a configuration path.
+fn file_label(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Act on a configuration that could not be loaded, and report what was done.
+///
+/// Returns the notice to show, and whether writes to this path must be refused
+/// for the rest of the session. That second value is the whole point: if the
+/// user's bytes are still sitting at the path, every later write — including
+/// the one on shutdown — would destroy exactly what was just preserved.
+fn recover_config(i18n: &I18n, path: &Path, why: &ConfigLoadError) -> (Option<Notice>, bool) {
+    let file = file_label(path);
+
+    match recovery_for(why) {
+        // Nothing was there. Defaults are right and writing is safe.
+        ConfigRecovery::StartFresh => (None, false),
+
+        ConfigRecovery::Preserve => match quarantine_file(path) {
+            // The bytes are safe elsewhere and the path is free: write away.
+            Ok(kept) => (
+                Some(Notice::error(i18n.tf(
+                    "config_corrupt_quarantined",
+                    &[
+                        ("file", file.as_str()),
+                        ("path", kept.display().to_string().as_str()),
+                    ],
+                ))),
+                false,
+            ),
+            // Could not move it. The bytes are still there, so nothing may
+            // write over them.
+            Err(e) => (
+                Some(Notice::error(i18n.tf(
+                    "config_corrupt_not_quarantined",
+                    &[
+                        ("file", file.as_str()),
+                        ("detail", format!("{}: {}", why, e).as_str()),
+                    ],
+                ))),
+                true,
+            ),
+        },
+
+        // We never saw the bytes, so the file may be perfectly healthy and
+        // merely locked. Renaming it to `.corrupt-` would be a lie and would
+        // bury a good configuration; writing over it would lose it outright.
+        ConfigRecovery::LeaveAlone => (
+            Some(Notice::error(i18n.tf(
+                "config_unreadable_left_alone",
+                &[
+                    ("file", file.as_str()),
+                    ("detail", why.to_string().as_str()),
+                ],
+            ))),
+            true,
+        ),
+    }
+}
+
+/// Report a save that was deliberately not attempted.
+fn write_blocked_notice(i18n: &I18n, path: &Path) -> Notice {
+    Notice::error(i18n.tf(
+        "config_write_blocked",
+        &[("file", file_label(path).as_str())],
+    ))
+}
+
+/// Report a configuration file that could not be written.
+fn save_failure_notice(i18n: &I18n, path: &Path, detail: &str) -> Notice {
+    Notice::error(i18n.tf(
+        "config_save_failed",
+        &[("file", file_label(path).as_str()), ("detail", detail)],
+    ))
 }
 
 impl FaroQemApp {
@@ -67,22 +154,50 @@ impl FaroQemApp {
         vms_path: PathBuf,
         ctx: Option<&egui::Context>,
     ) -> Self {
-        let settings = load_settings(&settings_path);
-        let mut vms = load_vms(&vms_path);
+        let mut notices: Vec<Notice> = Vec::new();
 
-        if vms.is_empty() {
+        // Settings come first: the chosen language decides what language the
+        // notices below are written in.
+        let (settings, settings_write_blocked) = match try_load_settings(&settings_path) {
+            Ok(loaded) => (loaded, false),
+            Err(why) => {
+                let defaults = AppSettings::default();
+                let (notice, blocked) =
+                    recover_config(&I18n::new(&defaults.language), &settings_path, &why);
+                notices.extend(notice);
+                (defaults, blocked)
+            }
+        };
+
+        let i18n = I18n::new(&settings.language);
+
+        // A VM list that exists but could not be loaded is the user's data.
+        // Writing a starter VM over it is precisely what used to destroy it, so
+        // `may_seed` stays false for anything but an absent or readable file.
+        let (mut vms, vms_write_blocked, may_seed) = match try_load_vms(&vms_path) {
+            Ok(loaded) => (loaded, false, true),
+            Err(why) => {
+                let may_seed = recovery_for(&why) == ConfigRecovery::StartFresh;
+                let (notice, blocked) = recover_config(&i18n, &vms_path, &why);
+                notices.extend(notice);
+                (Vec::new(), blocked, may_seed)
+            }
+        };
+
+        if vms.is_empty() && may_seed {
             let mut default_vm = VmConfig::default();
             default_vm.id = Uuid::new_v4();
             default_vm.name = "Debian 12".to_string();
             default_vm.arch = settings.default_arch;
             default_vm.machine_type = default_vm.arch.default_machine().to_string();
             default_vm.cpu_model = default_vm.arch.default_cpu().to_string();
-            let _ = save_vms(&vms_path, &[default_vm.clone()]);
+            if let Err(e) = save_vms(&vms_path, &[default_vm.clone()]) {
+                notices.push(save_failure_notice(&i18n, &vms_path, &e));
+            }
             vms.push(default_vm);
         }
 
         let selected_vm_id = vms.first().map(|v| v.id);
-        let i18n = I18n::new(&settings.language);
 
         let logo_texture = ctx.and_then(|c| {
             crate::ui::theme::load_app_logo()
@@ -112,6 +227,55 @@ impl FaroQemApp {
             cli_previews: HashMap::new(),
             confirming_delete_id: None,
             logo_texture,
+            notices,
+            vms_write_blocked,
+            settings_write_blocked,
+        }
+    }
+
+    /// Add a notice, unless the very same message is already on screen.
+    ///
+    /// One identical failure per click — which is what an unwritable
+    /// configuration directory produces — would otherwise grow a band tall
+    /// enough to push the menu bar, Exit included, off the window.
+    fn push_notice(&mut self, notice: Notice) {
+        const MAX_NOTICES: usize = 5;
+
+        if self.notices.iter().any(|n| n.text == notice.text) {
+            return;
+        }
+        if self.notices.len() >= MAX_NOTICES {
+            self.notices.remove(0);
+        }
+        self.notices.push(notice);
+    }
+
+    /// Persist the VM list, reporting a failure instead of discarding it.
+    ///
+    /// A silently dropped write means the user's next start quietly loses the
+    /// change they just made.
+    fn save_vms_now(&mut self) {
+        if self.vms_write_blocked {
+            let notice = write_blocked_notice(&self.i18n, &self.vms_path);
+            self.push_notice(notice);
+            return;
+        }
+        if let Err(e) = save_vms(&self.vms_path, &self.vms) {
+            let notice = save_failure_notice(&self.i18n, &self.vms_path, &e);
+            self.push_notice(notice);
+        }
+    }
+
+    /// Persist application settings, reporting a failure instead of discarding it.
+    fn save_settings_now(&mut self) {
+        if self.settings_write_blocked {
+            let notice = write_blocked_notice(&self.i18n, &self.settings_path);
+            self.push_notice(notice);
+            return;
+        }
+        if let Err(e) = save_settings(&self.settings_path, &self.settings) {
+            let notice = save_failure_notice(&self.i18n, &self.settings_path, &e);
+            self.push_notice(notice);
         }
     }
 
@@ -266,7 +430,7 @@ impl FaroQemApp {
                 let new_id = new_vm.id;
                 self.vms.push(new_vm);
                 self.selected_vm_id = Some(new_id);
-                let _ = save_vms(&self.vms_path, &self.vms);
+                self.save_vms_now();
             }
             SidebarAction::DuplicateVm(id) => {
                 if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
@@ -276,7 +440,7 @@ impl FaroQemApp {
                     let new_id = cloned.id;
                     self.vms.push(cloned);
                     self.selected_vm_id = Some(new_id);
-                    let _ = save_vms(&self.vms_path, &self.vms);
+                    self.save_vms_now();
                 }
             }
             SidebarAction::DeleteVm(id) => {
@@ -286,7 +450,7 @@ impl FaroQemApp {
                 self.cli_previews.remove(&id);
                 if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
                     self.vms.remove(pos);
-                    let _ = save_vms(&self.vms_path, &self.vms);
+                    self.save_vms_now();
                     if self.selected_vm_id == Some(id) {
                         if self.vms.is_empty() {
                             self.selected_vm_id = None;
@@ -314,7 +478,7 @@ impl FaroQemApp {
                 let _ = self.stop_vm(id);
             }
             VmDetailAction::Save(_id) => {
-                let _ = save_vms(&self.vms_path, &self.vms);
+                self.save_vms_now();
             }
         }
     }
@@ -355,7 +519,19 @@ impl FaroQemApp {
         let mut menu_sidebar_action: Option<SidebarAction> = None;
         let mut menu_detail_action: Option<VmDetailAction> = None;
 
-        // 2. Top Menu Bar (Global application commands & Settings)
+        // 2. Notice band: problems with the stored configuration, above
+        // everything else so they cannot be missed. Taken out of `self` for the
+        // duration, because the band needs `notices` mutably and `i18n` for its
+        // labels at the same time.
+        if !self.notices.is_empty() {
+            let mut notices = std::mem::take(&mut self.notices);
+            egui::TopBottomPanel::top("notice_bar").show(ctx, |ui| {
+                NoticeBar::new(&mut notices).show(ui, &self.i18n);
+            });
+            self.notices = notices;
+        }
+
+        // 3. Top Menu Bar (Global application commands & Settings)
         egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 // File Menu
@@ -566,7 +742,7 @@ impl FaroQemApp {
             let mut dialog =
                 SettingsDialog::new(&mut self.settings_open, &mut self.settings, &mut self.i18n);
             if dialog.show(ctx) {
-                let _ = save_settings(&self.settings_path, &self.settings);
+                self.save_settings_now();
                 apply_theme(ctx, &self.settings.theme);
                 self.i18n.set_locale(&self.settings.language);
             }
@@ -615,8 +791,16 @@ impl Drop for FaroQemApp {
         for (_id, (mut proc, _)) in self.running_processes.drain() {
             let _ = proc.kill();
         }
-        let _ = save_vms(&self.vms_path, &self.vms);
-        let _ = save_settings(&self.settings_path, &self.settings);
+        // Results are discarded deliberately: the window is going away, so
+        // there is no interface left that could show a notice about a failed
+        // write. The barriers are NOT optional here — this was the last place
+        // that still overwrote a configuration it had promised to preserve.
+        if !self.vms_write_blocked {
+            let _ = save_vms(&self.vms_path, &self.vms);
+        }
+        if !self.settings_write_blocked {
+            let _ = save_settings(&self.settings_path, &self.settings);
+        }
     }
 }
 

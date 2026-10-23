@@ -5,7 +5,6 @@
   "no_vms_found": "No virtual machines found",
   "vm_list_title": "Virtual Machines",
   "vm_name": "VM Name",
-
   "launch": "Launch VM",
   "stop": "Force Stop",
   "save": "Save Profile",
@@ -22,13 +21,11 @@
   "apply": "Apply",
   "remove": "Remove",
   "create": "Create",
-
   "tab_system": "System & Hardware",
   "tab_storage": "Storage & Media",
   "tab_display": "Display & Graphics",
   "tab_network": "Network & Advanced",
   "tab_console": "Live Console",
-
   "arch": "Architecture",
   "machine": "Machine Type",
   "cpu": "CPU Model",
@@ -36,7 +33,6 @@
   "memory_mb": "Memory (MB)",
   "accel": "Accelerator",
   "uefi": "UEFI / BIOS Firmware",
-
   "format": "Format",
   "interface": "Interface",
   "boot_index": "Boot Index",
@@ -47,7 +43,6 @@
   "cdroms": "CD/DVD Drives",
   "disk_path": "Disk Path",
   "remove_disk": "Remove Disk",
-
   "vga_type": "VGA / Graphics Card",
   "backend": "Display Backend",
   "fullscreen": "Fullscreen",
@@ -58,14 +53,12 @@
   "add_port_forward": "Add Port Forward",
   "proto": "Protocol",
   "extra_args": "Extra QEMU Arguments",
-
   "status_running": "Running",
   "status_stopped": "Stopped",
   "status_error": "Error",
   "running": "Running",
   "stopped": "Stopped",
   "error": "Error",
-
   "settings": "Settings",
   "language": "Language",
   "theme": "Theme",
@@ -88,5 +81,11 @@
   "menu_help": "Help",
   "open_settings": "Preferences & Settings...",
   "about": "About FARO QEMU MANAGER",
-  "exit": "Exit"
+  "exit": "Exit",
+  "notice_dismiss": "Dismiss",
+  "config_corrupt_quarantined": "Could not read {file}. The file was kept at {path} and nothing was overwritten.",
+  "config_corrupt_not_quarantined": "Could not read {file}, and it could not be moved aside either ({detail}). The file was left untouched.",
+  "config_save_failed": "Could not save {file}: {detail}",
+  "config_unreadable_left_alone": "Could not read {file} ({detail}). It was left exactly as it is, and nothing will be written to it this session. Close whatever is using it and start again.",
+  "config_write_blocked": "Did not save {file}: it still holds a configuration that could not be read, and writing over it would destroy that."
 }

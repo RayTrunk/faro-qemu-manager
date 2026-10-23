@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
 
 /// Supported CPU architectures for QEMU emulation
@@ -386,15 +388,94 @@ pub fn default_settings_path() -> PathBuf {
     default_config_dir().join("settings.json")
 }
 
-/// Load the list of VMs from a JSON file. Returns empty list if missing or corrupted.
+/// Why a configuration file could not be loaded.
+///
+/// The distinction matters: `Missing` is a normal first start and may be
+/// answered with defaults, while `Unreadable` and `Corrupt` mean a file exists
+/// that the user cares about. Replacing one of those destroys their work.
+#[derive(Debug)]
+pub enum ConfigLoadError {
+    /// Nothing to load: no such file, or a file with no content at all. A
+    /// zero-byte file is an aborted write, not a configuration.
+    Missing,
+    /// The file exists but could not be read.
+    Unreadable(std::io::Error),
+    /// The file was read but does not parse as this configuration.
+    Corrupt { detail: String },
+}
+
+impl fmt::Display for ConfigLoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigLoadError::Missing => write!(f, "no configuration file present"),
+            ConfigLoadError::Unreadable(e) => write!(f, "{}", e),
+            ConfigLoadError::Corrupt { detail } => write!(f, "{}", detail),
+        }
+    }
+}
+
+/// Read a configuration file into a string, separating absence from read errors.
+fn read_config_text(path: &Path) -> Result<String, ConfigLoadError> {
+    // One read decides it, rather than exists() followed by a read. `exists()`
+    // reports false for a permission or I/O error on the stat as well as for a
+    // genuine absence, and "absent" is the one answer that permits writing.
+    let content = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(ConfigLoadError::Missing),
+        Err(e) => return Err(ConfigLoadError::Unreadable(e)),
+    };
+
+    if content.trim().is_empty() {
+        return Err(ConfigLoadError::Missing);
+    }
+    Ok(content)
+}
+
+/// What startup should do with a configuration it could not load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigRecovery {
+    /// Nothing was there. Defaults are right, and writing is safe.
+    StartFresh,
+    /// The bytes were read and are not valid. Set the file aside, then write.
+    Preserve,
+    /// The bytes were never seen. The file may be perfectly fine and merely
+    /// locked, so leave it entirely alone — do not rename it, do not write over
+    /// it — and try again next time.
+    LeaveAlone,
+}
+
+/// Decide how to recover from a load failure.
+pub fn recovery_for(why: &ConfigLoadError) -> ConfigRecovery {
+    match why {
+        ConfigLoadError::Missing => ConfigRecovery::StartFresh,
+        ConfigLoadError::Corrupt { .. } => ConfigRecovery::Preserve,
+        ConfigLoadError::Unreadable(_) => ConfigRecovery::LeaveAlone,
+    }
+}
+
+/// Load the list of VMs, reporting why it could not be loaded.
+pub fn try_load_vms(path: &Path) -> Result<Vec<VmConfig>, ConfigLoadError> {
+    let content = read_config_text(path)?;
+    serde_json::from_str(&content).map_err(|e| ConfigLoadError::Corrupt {
+        detail: e.to_string(),
+    })
+}
+
+/// Load application settings, reporting why they could not be loaded.
+pub fn try_load_settings(path: &Path) -> Result<AppSettings, ConfigLoadError> {
+    let content = read_config_text(path)?;
+    serde_json::from_str(&content).map_err(|e| ConfigLoadError::Corrupt {
+        detail: e.to_string(),
+    })
+}
+
+/// Load the list of VMs from a JSON file. Returns an empty list if missing or corrupted.
+///
+/// Lenient: it cannot tell a first start from a damaged file, so a caller that
+/// writes on "empty" will overwrite a damaged one. New code should use
+/// [`try_load_vms`] and preserve what it cannot read.
 pub fn load_vms(path: &Path) -> Vec<VmConfig> {
-    if !path.exists() {
-        return Vec::new();
-    }
-    match std::fs::read_to_string(path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+    try_load_vms(path).unwrap_or_default()
 }
 
 /// Save the list of VMs to a JSON file.
@@ -405,14 +486,10 @@ pub fn save_vms(path: &Path, vms: &[VmConfig]) -> Result<(), String> {
 }
 
 /// Load application settings from a JSON file. Returns defaults if missing or corrupted.
+///
+/// Lenient in the same way as [`load_vms`]; prefer [`try_load_settings`].
 pub fn load_settings(path: &Path) -> AppSettings {
-    if !path.exists() {
-        return AppSettings::default();
-    }
-    match std::fs::read_to_string(path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => AppSettings::default(),
-    }
+    try_load_settings(path).unwrap_or_default()
 }
 
 /// Save application settings to a JSON file.
@@ -422,7 +499,103 @@ pub fn save_settings(path: &Path, settings: &AppSettings) -> Result<(), String> 
     write_config_file(path, json.as_bytes())
 }
 
+/// Move a configuration file aside under a timestamped sibling name.
+///
+/// Used when a file cannot be read: the user's bytes are preserved so they can
+/// recover them, and the original path is freed so the application can start.
+/// An existing quarantine is never replaced — a second failure gets its own
+/// name, because the first copy may be the one worth recovering.
+///
+/// Returns the path the file now lives at.
+pub fn quarantine_file(path: &Path) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Err(format!("Nothing to set aside at {}", path.display()));
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let base_name = path.file_name().unwrap_or_default().to_os_string();
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+
+    for attempt in 0..1000u32 {
+        let mut name = base_name.clone();
+        if attempt == 0 {
+            name.push(format!(".corrupt-{}", stamp));
+        } else {
+            name.push(format!(".corrupt-{}-{}", stamp, attempt));
+        }
+        let target = match parent {
+            Some(dir) => dir.join(&name),
+            None => PathBuf::from(&name),
+        };
+        // Claim the name before renaming onto it. `fs::rename` replaces an
+        // existing target, so a plain `exists()` check loses the race against
+        // another instance starting on the same file in the same second — and
+        // the copy it clobbered might be the one worth recovering.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(format!(
+                    "Failed to claim {} for {}: {}",
+                    target.display(),
+                    path.display(),
+                    e
+                ))
+            }
+        }
+
+        return std::fs::rename(path, &target)
+            .map(|()| target.clone())
+            .map_err(|e| {
+                // Release the claim so the name is not left as an empty decoy.
+                let _ = std::fs::remove_file(&target);
+                format!(
+                    "Failed to set {} aside as {}: {}",
+                    path.display(),
+                    target.display(),
+                    e
+                )
+            });
+    }
+
+    Err(format!(
+        "Could not find a free name to set {} aside",
+        path.display()
+    ))
+}
+
+/// Build a unique staging path next to `path`, used for an atomic write.
+///
+/// The staging file must live in the same directory as the target so that the
+/// final rename stays on one volume.
+fn temp_sibling_path(path: &Path) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".tmp-{}-{}", std::process::id(), seq));
+
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+        _ => PathBuf::from(name),
+    }
+}
+
 /// Write data to a target path, creating parent directories if needed.
+///
+/// The payload goes to a staging file first and is then renamed over the
+/// target, so a concurrent reader always sees either the previous file or the
+/// complete new one — never a truncated one. Writing straight to the target
+/// would empty it before refilling it, and a crash or a reader in that window
+/// would find a torn configuration.
 fn write_config_file(path: &Path, data: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -430,5 +603,31 @@ fn write_config_file(path: &Path, data: &[u8]) -> Result<(), String> {
                 .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
         }
     }
-    std::fs::write(path, data).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
+
+    let staging = temp_sibling_path(path);
+
+    // Flush to the device before the rename. Without this, a crash or power
+    // loss can leave the target present but zero-length — and a zero-length
+    // file reads as "no configuration", which gets answered with defaults and
+    // no word to the user. The rename alone only protects concurrent readers.
+    let staged = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&staging)?;
+        file.write_all(data)?;
+        file.sync_all()
+    })();
+
+    if let Err(e) = staged {
+        let _ = std::fs::remove_file(&staging);
+        return Err(format!("Failed to write {}: {}", staging.display(), e));
+    }
+
+    std::fs::rename(&staging, path).map_err(|e| {
+        let _ = std::fs::remove_file(&staging);
+        format!(
+            "Failed to move {} onto {}: {}",
+            staging.display(),
+            path.display(),
+            e
+        )
+    })
 }
