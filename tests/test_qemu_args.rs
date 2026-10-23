@@ -73,7 +73,9 @@ fn test_build_qemu_args_all_components() {
     assert!(joined.contains("-smp 8"));
     assert!(joined.contains("-m 8192M"));
     assert!(joined.contains("-bios /path/to/bios.bin"));
-    assert!(joined.contains("-cdrom /path/to/install.iso"));
+    // An ISO is its own CD-ROM drive now: -cdrom cannot be given twice, so it
+    // cannot be the construction when more than one ISO is allowed.
+    assert!(joined.contains("media=cdrom,index=2,file=/path/to/install.iso"));
     assert!(joined.contains("-vga virtio"));
     assert!(joined.contains("-display default"));
     assert!(joined.contains("-full-screen"));
@@ -327,4 +329,56 @@ fn test_a_path_with_a_comma_does_not_split_the_drive_option() {
         "a comma in a path must be escaped by doubling it, got: {}",
         spec
     );
+}
+
+// --------------------------------------------------------------------------
+// Part 2: more than one ISO, and port forwards only where they work
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_two_isos_become_two_cdrom_drives() {
+    let args = build_cdrom_args(&[PathBuf::from("a.iso"), PathBuf::from("b.iso")]).join(" ");
+    assert_eq!(args.matches("media=cdrom").count(), 2, "got: {}", args);
+    assert!(args.contains("index=2"));
+    assert!(args.contains("index=3"));
+    assert!(
+        !args.contains("-cdrom"),
+        "two -cdrom flags make QEMU refuse to start"
+    );
+}
+
+#[test]
+fn test_empty_iso_paths_are_skipped() {
+    assert!(build_cdrom_args(&[PathBuf::new()]).is_empty());
+}
+
+#[test]
+fn test_port_forwards_only_reach_the_user_backend() {
+    let mut net = NetworkConfig::default();
+    net.port_forwards.push(PortForwardRule {
+        host_port: 2222,
+        guest_port: 22,
+        proto: "tcp".to_string(),
+    });
+
+    let as_user = build_network_args(&net).join(" ");
+    assert!(as_user.contains("hostfwd=tcp::2222-:22"));
+
+    net.backend = "tap".to_string();
+    let as_tap = build_network_args(&net).join(" ");
+    assert!(
+        !as_tap.contains("hostfwd"),
+        "hostfwd is a user-backend option; QEMU refuses it on tap, got: {}",
+        as_tap
+    );
+    assert!(as_tap.contains("-netdev tap,id=net0"));
+}
+
+#[test]
+fn test_backend_none_disables_networking() {
+    let net = NetworkConfig {
+        backend: "none".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(build_network_args(&net), vec!["-nic", "none"]);
 }

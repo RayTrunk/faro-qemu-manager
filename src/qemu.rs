@@ -404,14 +404,28 @@ pub fn build_drive_args(drives: &[DriveConfig]) -> Vec<String> {
 }
 
 /// Build the CD-ROM arguments for a VM.
+///
+/// `-cdrom` is shorthand for a single drive at a fixed index, so giving it
+/// twice makes QEMU refuse to start with "drive with bus=2, unit=0 exists".
+/// Each ISO therefore becomes its own CD-ROM drive at a distinct index.
+/// Indices start at 2 because 0 and 1 are taken by the automatic slots.
 pub fn build_cdrom_args(cdroms: &[PathBuf]) -> Vec<String> {
     let mut args = Vec::new();
+    let mut index = 2u32;
+
     for cdrom in cdroms {
-        if !cdrom.as_os_str().is_empty() {
-            args.push("-cdrom".to_string());
-            args.push(cdrom.display().to_string());
+        if cdrom.as_os_str().is_empty() {
+            continue;
         }
+        args.push("-drive".to_string());
+        args.push(format!(
+            "media=cdrom,index={},file={}",
+            index,
+            escape_opt_value(&cdrom.display().to_string())
+        ));
+        index += 1;
     }
+
     args
 }
 
@@ -432,11 +446,18 @@ pub fn build_network_args(net: &crate::config::NetworkConfig) -> Vec<String> {
     }
 
     let mut netdev = format!("{},id=net0", backend);
-    for rule in &net.port_forwards {
-        netdev.push_str(&format!(
-            ",hostfwd={}::{}-:{}",
-            rule.proto, rule.host_port, rule.guest_port
-        ));
+
+    // hostfwd belongs to the user-mode backend alone. QEMU answers
+    // "Invalid parameter 'hostfwd'" on tap, so the rules stay in the stored
+    // configuration but do not reach the command line. The UI says where they
+    // do not apply.
+    if backend.eq_ignore_ascii_case("user") {
+        for rule in &net.port_forwards {
+            netdev.push_str(&format!(
+                ",hostfwd={}::{}-:{}",
+                rule.proto, rule.host_port, rule.guest_port
+            ));
+        }
     }
     args.push("-netdev".to_string());
     args.push(netdev);

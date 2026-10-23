@@ -53,3 +53,41 @@ fn test_qemu_accepts_every_drive_interface() {
         common::assert_accepted(iface.as_str(), Arch::X86_64, &build_qemu_args(&vm));
     }
 }
+
+#[test]
+fn test_qemu_accepts_two_isos_alongside_a_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let disk = dir.path().join("d.qcow2");
+    common::make_empty_qcow2(&disk);
+    let a = dir.path().join("a.iso");
+    let b = dir.path().join("b.iso");
+    std::fs::write(&a, b"").unwrap();
+    std::fs::write(&b, b"").unwrap();
+
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    vm.drives.push(DriveConfig {
+        path: disk,
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::VirtIO,
+        boot_index: None,
+    });
+    vm.cdroms.push(a);
+    vm.cdroms.push(b);
+
+    common::assert_accepted("two ISOs + disk", Arch::X86_64, &build_qemu_args(&vm));
+}
+
+#[test]
+fn test_qemu_accepts_user_networking_with_two_port_forwards() {
+    use faro_qem::config::PortForwardRule;
+
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    for (host, guest) in [(2222u16, 22u16), (8080, 80)] {
+        vm.network.port_forwards.push(PortForwardRule {
+            host_port: host,
+            guest_port: guest,
+            proto: "tcp".to_string(),
+        });
+    }
+    common::assert_accepted("user + 2 forwards", Arch::X86_64, &build_qemu_args(&vm));
+}
