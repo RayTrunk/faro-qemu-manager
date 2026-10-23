@@ -3,6 +3,7 @@
 
 use egui::{Color32, Margin, Stroke};
 use std::collections::HashMap;
+use std::path::Path;
 use uuid::Uuid;
 
 use crate::config::{Arch, VmConfig};
@@ -19,7 +20,12 @@ pub enum SidebarAction {
     SelectVm(Uuid),
     NewVm,
     DuplicateVm(Uuid),
-    DeleteVm(Uuid),
+    /// Remove this machine. `with_folder` is the box in the confirmation
+    /// dialog, which is never pre-ticked: the folder is the user's data.
+    DeleteVm {
+        id: Uuid,
+        with_folder: bool,
+    },
     OpenSettings,
 }
 
@@ -70,6 +76,12 @@ pub struct SidebarView<'a> {
     pub i18n: &'a I18n,
     pub confirming_delete_id: Option<&'a mut Option<Uuid>>,
     pub logo: Option<&'a egui::TextureHandle>,
+    /// The folder deleting the machine under confirmation could take, when it
+    /// has one under the VM directory. Without it, no box is offered.
+    pub delete_folder: Option<&'a Path>,
+    /// Whether that box is ticked. The caller owns it so that it survives
+    /// between frames, and resets it when the dialog opens.
+    pub delete_with_folder: Option<&'a mut bool>,
 }
 
 impl<'a> SidebarView<'a> {
@@ -89,7 +101,16 @@ impl<'a> SidebarView<'a> {
             i18n,
             confirming_delete_id: None,
             logo: None,
+            delete_folder: None,
+            delete_with_folder: None,
         }
+    }
+
+    /// Offer the delete dialog a folder it may take, and the tick that says so.
+    pub fn with_delete_folder(mut self, consent: &'a mut bool, folder: Option<&'a Path>) -> Self {
+        self.delete_with_folder = Some(consent);
+        self.delete_folder = folder;
+        self
     }
 
     /// Attach an optional logo texture to display in the header
@@ -197,7 +218,10 @@ impl<'a> SidebarView<'a> {
                     if let Some(ref mut confirm_slot) = self.confirming_delete_id {
                         **confirm_slot = Some(id);
                     } else {
-                        action = Some(SidebarAction::DeleteVm(id));
+                        action = Some(SidebarAction::DeleteVm {
+                            id,
+                            with_folder: false,
+                        });
                     }
                 }
             }
@@ -389,10 +413,29 @@ impl<'a> SidebarView<'a> {
                             vm_name
                         ));
                         ui.label(
-                            egui::RichText::new("This action will remove the VM configuration.")
+                            egui::RichText::new(self.i18n.t("delete_removes_config"))
                                 .size(11.0)
                                 .color(COLOR_ERROR),
                         );
+
+                        // The files are the user's. The box names the folder
+                        // it would take and starts unticked, so that losing a
+                        // disk needs a deliberate click, never a reflex.
+                        let mut take_folder = false;
+                        if let (Some(folder), Some(consent)) =
+                            (self.delete_folder, self.delete_with_folder.as_mut())
+                        {
+                            ui.add_space(8.0);
+                            ui.checkbox(
+                                consent,
+                                self.i18n.tf(
+                                    "delete_take_folder",
+                                    &[("path", &folder.display().to_string())],
+                                ),
+                            );
+                            take_folder = **consent;
+                        }
+
                         ui.add_space(12.0);
                         ui.horizontal(|ui| {
                             if danger_button(
@@ -401,7 +444,10 @@ impl<'a> SidebarView<'a> {
                             )
                             .clicked()
                             {
-                                action = Some(SidebarAction::DeleteVm(del_id));
+                                action = Some(SidebarAction::DeleteVm {
+                                    id: del_id,
+                                    with_folder: take_folder,
+                                });
                                 close_modal = true;
                             }
                             if ui.button(self.i18n.t("cancel")).clicked() {

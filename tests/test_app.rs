@@ -86,7 +86,13 @@ fn test_faro_qem_app_sidebar_actions() {
     assert_eq!(app.selected_vm_id, Some(initial_vm_id));
 
     // 4. Delete VM
-    app.handle_sidebar_action(SidebarAction::DeleteVm(dup_vm_id), None);
+    app.handle_sidebar_action(
+        SidebarAction::DeleteVm {
+            id: dup_vm_id,
+            with_folder: false,
+        },
+        None,
+    );
     assert_eq!(app.vms.len(), 2);
     assert!(app.vms.iter().all(|v| v.id != dup_vm_id));
     assert_eq!(load_vms(&vms_path).len(), 2);
@@ -758,5 +764,162 @@ fn test_a_uefi_machine_made_the_way_the_interface_makes_one_actually_starts() {
         "status was {:?}, QEMU said:\n{}",
         status,
         said
+    );
+}
+
+// --------------------------------------------------------------------------
+// Part 3a, task 7: a copy gets its own image, deleting asks about the folder
+// --------------------------------------------------------------------------
+
+/// A machine from the alpine template, with a real disk made by qemu-img.
+fn alpine_in(app: &mut FaroQemApp, name: &str) -> uuid::Uuid {
+    let draft = VmTemplate::by_key("alpine")
+        .unwrap()
+        .instantiate(name, Path::new(""));
+    app.create_from_wizard(draft, 1)
+        .expect("the machine is created")
+}
+
+/// A machine the user built by hand, its disk somewhere of their choosing.
+fn hand_made_pointing_at(app: &mut FaroQemApp, disk: &Path) -> uuid::Uuid {
+    let mut vm = VmConfig::new_default("hand-made", Arch::X86_64);
+    vm.drives.push(DriveConfig {
+        path: disk.to_path_buf(),
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::VirtIO,
+        boot_index: None,
+    });
+    let id = vm.id;
+    app.vms.push(vm);
+    id
+}
+
+#[test]
+fn test_duplicating_gives_the_copy_its_own_disk_file() {
+    // Spec section 5.7: two QEMU processes writing one qcow2 destroy it.
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(&dir.path().join("vms"));
+    let id = alpine_in(&mut app, "Alpine");
+    let original = app.vms.iter().find(|v| v.id == id).unwrap().drives[0]
+        .path
+        .clone();
+    std::fs::write(&original, b"ORIGINAL IMAGE").unwrap();
+
+    app.handle_sidebar_action(SidebarAction::DuplicateVm(id), None);
+
+    let copy = app
+        .vms
+        .iter()
+        .find(|v| v.id != id && v.name.contains("Alpine"))
+        .expect("the copy is in the list");
+    assert_ne!(
+        copy.drives[0].path, original,
+        "the copy must not point at the original image"
+    );
+    assert_eq!(
+        std::fs::read(&copy.drives[0].path).unwrap(),
+        b"ORIGINAL IMAGE",
+        "the copy's image carries the original's contents"
+    );
+    assert_eq!(
+        std::fs::read(&original).unwrap(),
+        b"ORIGINAL IMAGE",
+        "the original is untouched"
+    );
+}
+
+#[test]
+fn test_deleting_without_consent_keeps_the_folder() {
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(&dir.path().join("vms"));
+    let id = alpine_in(&mut app, "Alpine");
+    let folder = app.vms.iter().find(|v| v.id == id).unwrap().drives[0]
+        .path
+        .parent()
+        .unwrap()
+        .to_path_buf();
+
+    app.delete_vm(id, false);
+
+    assert!(app.vms.iter().all(|v| v.id != id), "the machine is gone");
+    assert!(
+        folder.is_dir(),
+        "the folder is the user's data, not ours to take unasked"
+    );
+}
+
+#[test]
+fn test_deleting_with_consent_takes_the_folder() {
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(&dir.path().join("vms"));
+    let id = alpine_in(&mut app, "Alpine");
+    let folder = app.vms.iter().find(|v| v.id == id).unwrap().drives[0]
+        .path
+        .parent()
+        .unwrap()
+        .to_path_buf();
+
+    app.delete_vm(id, true);
+
+    assert!(!folder.exists(), "consent was given");
+}
+
+#[test]
+fn test_deleting_never_reaches_outside_the_vm_directory() {
+    // A VM whose disk the user pointed somewhere else must not drag that
+    // directory away with it.
+    let dir = tempdir().unwrap();
+    let outside = dir.path().join("my-documents");
+    std::fs::create_dir_all(&outside).unwrap();
+    let disk = outside.join("important.qcow2");
+    std::fs::write(&disk, b"KEEP").unwrap();
+
+    let mut app = common::app_with_vm_dir(&dir.path().join("vms"));
+    let id = hand_made_pointing_at(&mut app, &disk);
+
+    app.delete_vm(id, true);
+
+    assert!(
+        disk.is_file(),
+        "only a folder under the VM directory may be taken"
+    );
+    assert!(outside.is_dir(), "the user's own directory stays");
+}
+
+#[test]
+fn test_duplicating_a_hand_made_vm_says_the_image_stays_shared() {
+    // An image outside the VM directory is not ours to copy; the user hears
+    // that the two machines share it rather than finding out by corruption.
+    let dir = tempdir().unwrap();
+    let outside = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&outside).unwrap();
+    let disk = outside.join("shared.qcow2");
+    std::fs::write(&disk, b"SHARED").unwrap();
+
+    let mut app = common::app_with_vm_dir(&dir.path().join("vms"));
+    let id = hand_made_pointing_at(&mut app, &disk);
+    app.notices.clear();
+
+    app.handle_sidebar_action(SidebarAction::DuplicateVm(id), None);
+
+    let said = app
+        .notices
+        .iter()
+        .map(|n| n.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        said.contains("shared.qcow2"),
+        "a shared image must be said out loud, naming it; notices were: {:?}",
+        said
+    );
+    let copy = app
+        .vms
+        .iter()
+        .find(|v| v.id != id && v.name.contains("hand-made"))
+        .expect("the copy is in the list");
+    assert_eq!(
+        copy.drives[0].path, disk,
+        "an image outside the VM directory stays a shared reference"
     );
 }

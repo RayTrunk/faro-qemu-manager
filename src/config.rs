@@ -594,11 +594,43 @@ pub fn claim_vm_folder(root: &Path, name: &str, id: Uuid) -> Result<PathBuf, Str
 
 /// Whether `folder` can be used by the VM with this `id`.
 fn folder_is_free_or_ours(folder: &Path, id: Uuid) -> bool {
-    if !folder.exists() {
-        return true;
-    }
+    !folder.exists() || folder_belongs_to(folder, id)
+}
+
+/// Whether `folder` exists and its marker names this VM.
+///
+/// Deletion asks this, not `folder_is_free_or_ours`: a folder that is simply
+/// not there answers "free" to that one, and nothing may be removed on the
+/// strength of an absent marker.
+fn folder_belongs_to(folder: &Path, id: Uuid) -> bool {
     std::fs::read_to_string(folder.join(OWNER_MARKER))
         .is_ok_and(|owner| owner.trim() == id.to_string())
+}
+
+/// The folder under `root` whose marker names this VM, if there is one.
+///
+/// Reading the marker rather than rebuilding the name from the VM's is what
+/// makes this survive a rename: the folder keeps whatever name it was created
+/// with, and the marker is the only thing that says whose it is. Only direct
+/// children of `root` are considered, so nothing outside the VM directory can
+/// ever be named here.
+pub fn find_vm_folder(root: &Path, id: Uuid) -> Option<PathBuf> {
+    std::fs::read_dir(root)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .find(|path| path.is_dir() && folder_belongs_to(path, id))
+}
+
+/// Whether `path` sits inside `root` — the test deletion has to pass.
+///
+/// Both sides are resolved first, so a path woven out of `..` cannot present
+/// itself as a child. A path that cannot be resolved is not inside anything.
+pub fn is_inside(root: &Path, path: &Path) -> bool {
+    match (root.canonicalize(), path.canonicalize()) {
+        (Ok(root), Ok(path)) => path != root && path.starts_with(&root),
+        _ => false,
+    }
 }
 
 /// Why a configuration file could not be loaded.

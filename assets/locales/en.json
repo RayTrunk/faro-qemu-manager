@@ -119,5 +119,10 @@
   "pf_accel_substituted": "{stored} is not available here; {replacement} would be used instead. Choose one on purpose.",
   "pf_backend_unavailable": "This QEMU has no network backend {backend}",
   "pf_machine_unknown": "This QEMU does not know the machine type {machine}",
-  "pf_too_many_sata": "{count} SATA disks, but the AHCI controller has {ports} ports"
+  "pf_too_many_sata": "{count} SATA disks, but the AHCI controller has {ports} ports",
+  "delete_removes_config": "This removes the machine from the list.",
+  "delete_take_folder": "Also take the folder and its files: {path}",
+  "delete_folder_failed": "The folder {path} could not be removed: {error}",
+  "duplicate_image_shared": "The image {path} lies outside the VM directory and was not copied. Both machines now use it, and running both at once destroys it.",
+  "duplicate_image_copy_failed": "The image could not be copied to {path}: {error}. Both machines now use the original, and running both at once destroys it."
 }

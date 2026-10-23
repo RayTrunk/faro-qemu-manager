@@ -185,13 +185,22 @@ fn test_sidebar_actions_variants() {
     let sel = SidebarAction::SelectVm(id);
     let new_vm = SidebarAction::NewVm;
     let dup = SidebarAction::DuplicateVm(id);
-    let del = SidebarAction::DeleteVm(id);
+    let del = SidebarAction::DeleteVm {
+        id,
+        with_folder: false,
+    };
     let settings = SidebarAction::OpenSettings;
 
     assert_eq!(sel, SidebarAction::SelectVm(id));
     assert_eq!(new_vm, SidebarAction::NewVm);
     assert_eq!(dup, SidebarAction::DuplicateVm(id));
-    assert_eq!(del, SidebarAction::DeleteVm(id));
+    assert_eq!(
+        del,
+        SidebarAction::DeleteVm {
+            id,
+            with_folder: false
+        }
+    );
     assert_eq!(settings, SidebarAction::OpenSettings);
     assert_ne!(new_vm, settings);
 }

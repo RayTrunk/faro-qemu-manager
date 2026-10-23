@@ -7,9 +7,9 @@ use std::sync::mpsc;
 use uuid::Uuid;
 
 use crate::config::{
-    claim_vm_folder, default_settings_path, default_vms_path, quarantine_file, recovery_for,
-    save_settings, save_vms, try_load_settings, try_load_vms, AppSettings, ConfigLoadError,
-    ConfigRecovery, CreationMode, Firmware, VmConfig,
+    claim_vm_folder, default_settings_path, default_vms_path, find_vm_folder, is_inside,
+    quarantine_file, recovery_for, save_settings, save_vms, try_load_settings, try_load_vms,
+    AppSettings, ConfigLoadError, ConfigRecovery, CreationMode, Firmware, VmConfig,
 };
 use crate::i18n::I18n;
 use crate::preflight::{blocks, check_vm, Finding, HostFacts};
@@ -62,6 +62,14 @@ pub struct FaroQemApp {
     pub uefi_firmware: Option<UefiFirmware>,
     /// The template wizard, when the settings take that way.
     pub wizard: WizardState,
+    /// Whether the user ticked "take the folder and files" in the delete box.
+    /// Never pre-ticked, and reset every time the box opens.
+    pub delete_with_folder: bool,
+    /// The folder the delete box offers to take, worked out once when the box
+    /// opens: finding it reads a directory, which is not a per-frame job.
+    pub delete_folder: Option<PathBuf>,
+    /// Which VM `delete_folder` was worked out for.
+    pub delete_folder_for: Option<Uuid>,
     /// What this host has, asked once. The start check compares against it.
     pub host: HostFacts,
 }
@@ -263,6 +271,9 @@ impl FaroQemApp {
             capabilities,
             uefi_firmware,
             wizard: WizardState::default(),
+            delete_with_folder: false,
+            delete_folder: None,
+            delete_folder_for: None,
             host: HostFacts::probe(),
         }
     }
@@ -364,6 +375,128 @@ impl FaroQemApp {
         self.selected_vm_id = Some(id);
         self.save_vms_now();
         Ok(id)
+    }
+
+    /// Duplicate a machine so that the copy owns everything it writes to.
+    ///
+    /// Two QEMU processes writing one qcow2 destroy it, so a copy that shares
+    /// the original's image is not a copy but a trap. Every image that lies
+    /// inside the VM directory is copied into the new machine's own folder.
+    /// An image outside it is left where it is and the two machines do share
+    /// it — that file is the user's, not ours to duplicate into a place they
+    /// never chose — and the sharing is said out loud instead of being
+    /// discovered later as corruption.
+    fn duplicate_vm(&mut self, id: Uuid) {
+        let Some(pos) = self.vms.iter().position(|v| v.id == id) else {
+            return;
+        };
+        let mut cloned = self.vms[pos].clone();
+        cloned.id = Uuid::new_v4();
+        cloned.name = format!("{} (Copy)", cloned.name);
+        let new_id = cloned.id;
+
+        let root = self.settings.vm_dir_or_default();
+        let mut problems: Vec<String> = Vec::new();
+        let mut folder: Option<PathBuf> = None;
+
+        for index in 0..cloned.drives.len() {
+            let source = cloned.drives[index].path.clone();
+            if !is_inside(&root, &source) {
+                problems.push(self.i18n.tf(
+                    "duplicate_image_shared",
+                    &[("path", &source.display().to_string())],
+                ));
+                continue;
+            }
+            // The folder is claimed only once, and only when there is
+            // something to put in it: a copy whose images all live elsewhere
+            // gets no empty folder.
+            let target_dir = match &folder {
+                Some(dir) => dir.clone(),
+                None => match claim_vm_folder(&root, &cloned.name, new_id) {
+                    Ok(dir) => {
+                        folder = Some(dir.clone());
+                        dir
+                    }
+                    Err(e) => {
+                        problems.push(e);
+                        break;
+                    }
+                },
+            };
+            let file_name = source
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from("disk.qcow2"));
+            let target = target_dir.join(file_name);
+            match std::fs::copy(&source, &target) {
+                Ok(_) => cloned.drives[index].path = target,
+                Err(e) => problems.push(self.i18n.tf(
+                    "duplicate_image_copy_failed",
+                    &[
+                        ("path", &target.display().to_string()),
+                        ("error", &e.to_string()),
+                    ],
+                )),
+            }
+        }
+
+        if let Some(problem) = self.rebase_nvram(&mut cloned) {
+            problems.push(problem);
+        }
+        for problem in problems {
+            self.push_notice(Notice::warning(problem));
+        }
+        self.vms.push(cloned);
+        self.selected_vm_id = Some(new_id);
+        self.save_vms_now();
+    }
+
+    /// Remove a machine, and its folder only if the user asked for that.
+    ///
+    /// `with_folder` is the box in the delete dialog, which is never
+    /// pre-ticked. Even with it ticked, only the folder whose marker names
+    /// this VM and that is a direct child of the VM directory is removed: a
+    /// disk the user pointed at their own documents must not drag that
+    /// directory away with it.
+    pub fn delete_vm(&mut self, id: Uuid, with_folder: bool) {
+        let folder = with_folder
+            .then(|| find_vm_folder(&self.settings.vm_dir_or_default(), id))
+            .flatten();
+
+        let _ = self.stop_vm(id);
+        self.status_map.remove(&id);
+        self.console_logs.remove(&id);
+        self.cli_previews.remove(&id);
+
+        if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
+            self.vms.remove(pos);
+            self.save_vms_now();
+            if self.selected_vm_id == Some(id) {
+                if self.vms.is_empty() {
+                    self.selected_vm_id = None;
+                } else if pos < self.vms.len() {
+                    self.selected_vm_id = Some(self.vms[pos].id);
+                } else {
+                    self.selected_vm_id = Some(self.vms[pos - 1].id);
+                }
+            }
+        }
+
+        // The folder goes last: a failure here must not leave a machine in
+        // the list that points at files already gone.
+        if let Some(folder) = folder {
+            if let Err(e) = std::fs::remove_dir_all(&folder) {
+                let text = self.i18n.tf(
+                    "delete_folder_failed",
+                    &[
+                        ("path", &folder.display().to_string()),
+                        ("error", &e.to_string()),
+                    ],
+                );
+                self.push_notice(Notice::warning(text));
+            }
+        }
     }
 
     /// Everything worth saying about this machine before it starts.
@@ -644,37 +777,10 @@ impl FaroQemApp {
                 self.save_vms_now();
             }
             SidebarAction::DuplicateVm(id) => {
-                if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
-                    let mut cloned = self.vms[pos].clone();
-                    cloned.id = Uuid::new_v4();
-                    cloned.name = format!("{} (Copy)", cloned.name);
-                    let new_id = cloned.id;
-                    if let Some(problem) = self.rebase_nvram(&mut cloned) {
-                        self.push_notice(Notice::warning(problem));
-                    }
-                    self.vms.push(cloned);
-                    self.selected_vm_id = Some(new_id);
-                    self.save_vms_now();
-                }
+                self.duplicate_vm(id);
             }
-            SidebarAction::DeleteVm(id) => {
-                let _ = self.stop_vm(id);
-                self.status_map.remove(&id);
-                self.console_logs.remove(&id);
-                self.cli_previews.remove(&id);
-                if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
-                    self.vms.remove(pos);
-                    self.save_vms_now();
-                    if self.selected_vm_id == Some(id) {
-                        if self.vms.is_empty() {
-                            self.selected_vm_id = None;
-                        } else if pos < self.vms.len() {
-                            self.selected_vm_id = Some(self.vms[pos].id);
-                        } else {
-                            self.selected_vm_id = Some(self.vms[pos - 1].id);
-                        }
-                    }
-                }
+            SidebarAction::DeleteVm { id, with_folder } => {
+                self.delete_vm(id, with_folder);
             }
             SidebarAction::OpenSettings => {
                 self.settings_open = true;
@@ -876,6 +982,20 @@ impl FaroQemApp {
         }
 
         // 3. Sidebar Navigation Panel
+        //
+        // The folder the delete box would offer is worked out when the box
+        // opens, not on every frame: finding it reads a directory. Opening
+        // the box also clears the tick, so consent is never inherited from
+        // the last machine the user deleted.
+        if self.delete_folder_for != self.confirming_delete_id {
+            self.delete_folder_for = self.confirming_delete_id;
+            self.delete_with_folder = false;
+            self.delete_folder = self
+                .confirming_delete_id
+                .and_then(|id| find_vm_folder(&self.settings.vm_dir_or_default(), id));
+        }
+        let delete_folder = self.delete_folder.clone();
+
         let mut sidebar_action = None;
         egui::SidePanel::left("sidebar_panel")
             .resizable(true)
@@ -891,6 +1011,7 @@ impl FaroQemApp {
                     &self.i18n,
                 )
                 .with_delete_confirmation(&mut self.confirming_delete_id)
+                .with_delete_folder(&mut self.delete_with_folder, delete_folder.as_deref())
                 .with_logo(self.logo_texture.as_ref())
                 .show(ui);
             });
