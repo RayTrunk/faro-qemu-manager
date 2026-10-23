@@ -1,10 +1,12 @@
 // FARO QEMU MANAGER (C) R.Trunk 2026
 // Fetching an installation image, and proving it arrived intact.
 
-use std::io::Read;
-use std::path::Path;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
@@ -325,6 +327,174 @@ pub fn sha256_of(path: &Path, cancel: &AtomicBool) -> Result<String, String> {
     }
 
     Ok(hex_of(&hasher.finalize()))
+}
+
+/// What the worker reports while it runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadEvent {
+    /// `total` is `None` when the mirror did not state a length.
+    Progress { done: u64, total: Option<u64> },
+    /// The bytes are all here; the digest is being computed. Worth saying,
+    /// because on a 6 GB image it takes long enough that a progress bar
+    /// sitting at 100% would look stuck.
+    Verifying,
+    /// Verified and moved to its final name.
+    Done(PathBuf),
+    /// Nothing was installed. The message says what went wrong.
+    Failed(String),
+}
+
+/// A running download: the flag that stops it, and the channel it reports on.
+pub struct DownloadHandle {
+    pub cancel: Arc<AtomicBool>,
+    pub rx: Receiver<DownloadEvent>,
+}
+
+/// Where the partial file lives while a download is in progress.
+///
+/// Appending a suffix rather than using a directory keeps it beside the
+/// target, on the same volume, so the final step is a rename and not a copy.
+/// It is also the whole of the "is this download finished?" bookkeeping: a
+/// file under the target name is verified, a `.part` beside it is not, and
+/// that remains true after the application is restarted and the thread that
+/// was writing it is long gone.
+pub fn part_path(target: &Path) -> PathBuf {
+    let mut name = target.file_name().unwrap_or_default().to_os_string();
+    name.push(".part");
+    target.with_file_name(name)
+}
+
+/// How often progress is reported, at most.
+const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+
+/// And how many bytes, at most, between reports.
+const PROGRESS_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Fetch `resolved` to `target`, in a thread of its own.
+///
+/// The order is what makes this safe: bytes go to `<target>.part`, the digest
+/// is computed there, and only a file whose digest matches is renamed to
+/// `target`. A file under the target name has therefore always been checked —
+/// spec section 6's hard requirement — and no stored "download in progress"
+/// flag is needed, which is good, because such a flag would lie after a
+/// restart.
+pub fn start(http: Arc<dyn Http>, resolved: Resolved, target: PathBuf) -> DownloadHandle {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let worker_cancel = Arc::clone(&cancel);
+
+    std::thread::spawn(move || {
+        let part = part_path(&target);
+        let outcome = fetch_and_verify(&*http, &resolved, &target, &part, &worker_cancel, &tx);
+        let event = match outcome {
+            Ok(()) => DownloadEvent::Done(target.clone()),
+            Err(problem) => {
+                // A digest that does not match means the bytes are wrong, so
+                // the partial is worthless and must not look resumable. A
+                // transfer that merely broke off leaves its partial for the
+                // next attempt.
+                if problem.discard_partial {
+                    let _ = std::fs::remove_file(&part);
+                }
+                DownloadEvent::Failed(problem.message)
+            }
+        };
+        let _ = tx.send(event);
+    });
+
+    DownloadHandle { cancel, rx }
+}
+
+/// A failure, and whether the partial file is worth keeping.
+struct Problem {
+    message: String,
+    discard_partial: bool,
+}
+
+impl Problem {
+    /// The transfer broke off. The bytes so far are good; keep them.
+    fn resumable(message: String) -> Self {
+        Self {
+            message,
+            discard_partial: false,
+        }
+    }
+
+    /// The bytes are wrong, or there are none. Nothing to resume from.
+    fn fatal(message: String) -> Self {
+        Self {
+            message,
+            discard_partial: true,
+        }
+    }
+}
+
+fn fetch_and_verify(
+    http: &dyn Http,
+    resolved: &Resolved,
+    target: &Path,
+    part: &Path,
+    cancel: &AtomicBool,
+    tx: &Sender<DownloadEvent>,
+) -> Result<(), Problem> {
+    // Resume from whatever is already there. A `.part` is only ever written
+    // by this function, so its length is a byte count we can trust.
+    let mut done = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+
+    let (mut stream, total) = http
+        .get_from(&resolved.url, done)
+        .map_err(Problem::resumable)?;
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(part)
+        // Nothing could be written at all — an unwritable directory, a path
+        // whose parent is a file. There is no partial to keep.
+        .map_err(|e| Problem::fatal(format!("{}: {}", part.display(), e)))?;
+
+    let mut buffer = vec![0u8; CHUNK];
+    let mut last_report = Instant::now();
+    let mut reported = done;
+    let _ = tx.send(DownloadEvent::Progress { done, total });
+
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(Problem::resumable("cancelled".to_string()));
+        }
+        let read = match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => return Err(Problem::resumable(format!("{}: {}", resolved.url, e))),
+        };
+        file.write_all(&buffer[..read])
+            .map_err(|e| Problem::fatal(format!("{}: {}", part.display(), e)))?;
+        done += read as u64;
+
+        if last_report.elapsed() >= PROGRESS_EVERY || done - reported >= PROGRESS_BYTES {
+            let _ = tx.send(DownloadEvent::Progress { done, total });
+            last_report = Instant::now();
+            reported = done;
+        }
+    }
+
+    file.flush()
+        .map_err(|e| Problem::fatal(format!("{}: {}", part.display(), e)))?;
+    drop(file);
+    let _ = tx.send(DownloadEvent::Progress { done, total });
+
+    let _ = tx.send(DownloadEvent::Verifying);
+    let actual = sha256_of(part, cancel).map_err(Problem::resumable)?;
+    if !actual.eq_ignore_ascii_case(&resolved.sha256) {
+        return Err(Problem::fatal(format!(
+            "{}: sha256 does not match. Expected {}, got {}. The file was discarded.",
+            resolved.file_name, resolved.sha256, actual
+        )));
+    }
+
+    std::fs::rename(part, target)
+        .map_err(|e| Problem::fatal(format!("{}: {}", target.display(), e)))?;
+    Ok(())
 }
 
 /// Lowercase hex, which is how every publisher writes its checksum files.
