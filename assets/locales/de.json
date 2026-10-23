@@ -5,7 +5,6 @@
   "no_vms_found": "Keine virtuellen Maschinen gefunden",
   "vm_list_title": "Virtuelle Maschinen",
   "vm_name": "VM-Name",
-
   "launch": "VM Starten",
   "stop": "Stoppen erzwingen",
   "save": "Profil speichern",
@@ -22,13 +21,11 @@
   "apply": "Übernehmen",
   "remove": "Entfernen",
   "create": "Erstellen",
-
   "tab_system": "System & Hardware",
   "tab_storage": "Speicher & Medien",
   "tab_display": "Anzeige & Grafik",
   "tab_network": "Netzwerk & Erweitert",
   "tab_console": "Echtzeit-Konsole",
-
   "arch": "Architektur",
   "machine": "Maschinentyp",
   "cpu": "CPU-Modell",
@@ -36,7 +33,6 @@
   "memory_mb": "Arbeitsspeicher (MB)",
   "accel": "Beschleuniger",
   "uefi": "UEFI / BIOS Firmware",
-
   "format": "Format",
   "interface": "Schnittstelle",
   "boot_index": "Boot-Index",
@@ -47,7 +43,6 @@
   "cdroms": "CD/DVD-Laufwerke",
   "disk_path": "Festplattenpfad",
   "remove_disk": "Festplatte entfernen",
-
   "vga_type": "VGA / Grafikkarte",
   "backend": "Anzeige-Backend",
   "fullscreen": "Vollbild",
@@ -58,14 +53,12 @@
   "add_port_forward": "Port-Weiterleitung hinzufügen",
   "proto": "Protokoll",
   "extra_args": "Zusätzliche QEMU-Argumente",
-
   "status_running": "Aktiv",
   "status_stopped": "Gestoppt",
   "status_error": "Fehler",
   "running": "Aktiv",
   "stopped": "Gestoppt",
   "error": "Fehler",
-
   "settings": "Einstellungen",
   "language": "Sprache",
   "theme": "Design",
@@ -88,5 +81,9 @@
   "menu_help": "Hilfe",
   "open_settings": "Einstellungen öffnen...",
   "about": "Über FARO QEMU MANAGER",
-  "exit": "Beenden"
+  "exit": "Beenden",
+  "notice_dismiss": "Verwerfen",
+  "config_corrupt_quarantined": "{file} konnte nicht gelesen werden. Die Datei wurde unter {path} aufbewahrt, überschrieben wurde nichts.",
+  "config_corrupt_not_quarantined": "{file} konnte nicht gelesen und auch nicht beiseitegelegt werden ({detail}). Die Datei blieb unberührt.",
+  "config_save_failed": "{file} konnte nicht gespeichert werden: {detail}"
 }
