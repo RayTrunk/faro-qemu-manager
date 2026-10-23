@@ -4,7 +4,7 @@
 use egui::Context;
 use std::path::PathBuf;
 
-use crate::config::{AppSettings, Arch};
+use crate::config::{default_vm_dir, AppSettings, Arch, CreationMode};
 use crate::i18n::I18n;
 use crate::qemu::find_qemu_binary;
 use crate::ui::theme::{apply_theme, icons, COLOR_RUNNING, COLOR_WARNING};
@@ -14,7 +14,6 @@ pub struct SettingsDialog<'a> {
     pub open: &'a mut bool,
     pub settings: &'a mut AppSettings,
     pub i18n: &'a mut I18n,
-    pub logo: Option<&'a egui::TextureHandle>,
 }
 
 impl<'a> SettingsDialog<'a> {
@@ -24,14 +23,7 @@ impl<'a> SettingsDialog<'a> {
             open,
             settings,
             i18n,
-            logo: None,
         }
-    }
-
-    /// Attach application logo texture
-    pub fn with_logo(mut self, logo: Option<&'a egui::TextureHandle>) -> Self {
-        self.logo = logo;
-        self
     }
 
     /// Renders the settings dialog window.
@@ -137,6 +129,78 @@ impl<'a> SettingsDialog<'a> {
                         modified = true;
                     }
                     ui.end_row();
+
+                    // Which way the New button takes. Both ways stay: the
+                    // wizard is a starting point, not a replacement.
+                    ui.label(egui::RichText::new(self.i18n.t("creation_mode")).strong());
+                    let mut mode = self.settings.creation_mode;
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(
+                            &mut mode,
+                            CreationMode::Wizard,
+                            self.i18n.t("creation_mode_wizard"),
+                        );
+                        ui.selectable_value(
+                            &mut mode,
+                            CreationMode::Direct,
+                            self.i18n.t("creation_mode_direct"),
+                        );
+                    });
+                    if mode != self.settings.creation_mode {
+                        self.settings.creation_mode = mode;
+                        modified = true;
+                    }
+                    ui.end_row();
+
+                    // Where VM folders go. Empty means the default, which is
+                    // not the same as freezing today's default into the file.
+                    ui.label(egui::RichText::new(self.i18n.t("vm_dir")).strong());
+                    ui.horizontal(|ui| {
+                        let mut shown = self
+                            .settings
+                            .vm_dir
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let default_hint = default_vm_dir().to_string_lossy().to_string();
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(&mut shown)
+                                .desired_width(260.0)
+                                .hint_text(default_hint),
+                        );
+                        if edit.changed() {
+                            let trimmed = shown.trim();
+                            self.settings.vm_dir = if trimmed.is_empty() {
+                                None
+                            } else {
+                                Some(PathBuf::from(trimmed))
+                            };
+                            modified = true;
+                        }
+                        if ui
+                            .button(format!("{} {}", icons::FOLDER, self.i18n.t("browse")))
+                            .clicked()
+                        {
+                            let mut dialog = rfd::FileDialog::new();
+                            if let Some(cur) = &self.settings.vm_dir {
+                                dialog = dialog.set_directory(cur);
+                            }
+                            if let Some(folder) = dialog.pick_folder() {
+                                self.settings.vm_dir = Some(folder);
+                                modified = true;
+                            }
+                        }
+                        if self.settings.vm_dir.is_some()
+                            && ui
+                                .button(icons::CLOSE)
+                                .on_hover_text(self.i18n.t("clear"))
+                                .clicked()
+                        {
+                            self.settings.vm_dir = None;
+                            modified = true;
+                        }
+                    });
+                    ui.end_row();
                 });
 
             ui.add_space(8.0);
@@ -161,7 +225,7 @@ impl<'a> SettingsDialog<'a> {
 
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut dir_str)
-                        .hint_text("Auto-detected (System PATH & defaults)")
+                        .hint_text(self.i18n.t("qemu_dir_auto"))
                         .desired_width(desired_width),
                 );
 
@@ -211,19 +275,20 @@ impl<'a> SettingsDialog<'a> {
                 Some(ref bin_path) => {
                     ui.label(egui::RichText::new(icons::CHECK).color(COLOR_RUNNING));
                     ui.label(
-                        egui::RichText::new(format!("QEMU binary found: {}", bin_path.display()))
-                            .size(12.0)
-                            .color(COLOR_RUNNING),
+                        egui::RichText::new(
+                            self.i18n
+                                .tf("qemu_found", &[("path", &bin_path.display().to_string())]),
+                        )
+                        .size(12.0)
+                        .color(COLOR_RUNNING),
                     );
                 }
                 None => {
                     ui.label(egui::RichText::new(icons::WARNING).color(COLOR_WARNING));
                     ui.label(
-                        egui::RichText::new(
-                            "No QEMU binary found in selected directory or system PATH",
-                        )
-                        .size(12.0)
-                        .color(COLOR_WARNING),
+                        egui::RichText::new(self.i18n.t("qemu_not_found"))
+                            .size(12.0)
+                            .color(COLOR_WARNING),
                     );
                 }
             });

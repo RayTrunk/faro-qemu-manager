@@ -343,6 +343,13 @@ pub struct VmConfig {
     pub network: NetworkConfig,
     #[serde(default)]
     pub extra_args: String,
+    /// Key of the template this machine started from, if any.
+    ///
+    /// Descriptive only. Nothing reads it to decide behaviour — a template is
+    /// a starting assignment, and after creation this is an ordinary machine.
+    /// It is kept so a later hint can mention where the machine came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 impl VmConfig {
@@ -364,6 +371,7 @@ impl VmConfig {
             display: DisplayConfig::default(),
             network: NetworkConfig::default(),
             extra_args: String::new(),
+            template: None,
         }
     }
 }
@@ -385,6 +393,55 @@ pub struct AppSettings {
     pub theme: String,
     #[serde(default)]
     pub default_arch: Arch,
+    /// Where this installation keeps its VM folders.
+    ///
+    /// Unset means "use [`default_vm_dir`]", not a frozen copy of it: a user
+    /// who never chose a directory follows the default when it changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vm_dir: Option<PathBuf>,
+    /// Which way the New button takes.
+    #[serde(default)]
+    pub creation_mode: CreationMode,
+    /// Version of the settings layout this file was written by.
+    ///
+    /// Absent means the file predates the setting above, which is how an
+    /// existing installation is told apart from a fresh one. A plain serde
+    /// default could not make that distinction and would push the wizard onto
+    /// people who already have machines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<u32>,
+}
+
+/// Layout version [`save_settings`] stamps into every file it writes.
+pub const SETTINGS_SCHEMA: u32 = 1;
+
+/// The two ways to create a machine, as chosen in the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CreationMode {
+    /// Template gallery with two fields and two collapsed blocks.
+    #[serde(rename = "wizard")]
+    #[default]
+    Wizard,
+    /// An empty configuration appears and every field is set by hand. This is
+    /// what the application did before the wizard existed.
+    #[serde(rename = "direct")]
+    Direct,
+}
+
+impl CreationMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CreationMode::Wizard => "wizard",
+            CreationMode::Direct => "direct",
+        }
+    }
+}
+
+impl AppSettings {
+    /// The VM directory in use, chosen or default.
+    pub fn vm_dir_or_default(&self) -> PathBuf {
+        self.vm_dir.clone().unwrap_or_else(default_vm_dir)
+    }
 }
 
 fn default_language() -> String {
@@ -402,6 +459,9 @@ impl Default for AppSettings {
             language: default_language(),
             theme: default_theme(),
             default_arch: Arch::X86_64,
+            vm_dir: None,
+            creation_mode: CreationMode::default(),
+            schema: None,
         }
     }
 }
@@ -434,6 +494,189 @@ pub fn default_vms_path() -> PathBuf {
 /// Resolve the default path for `settings.json`
 pub fn default_settings_path() -> PathBuf {
     default_config_dir().join("settings.json")
+}
+
+/// Where VM folders go when the user has not chosen a directory.
+///
+/// This has to be an absolute path. A relative one would put 64 GB disk
+/// images wherever the app happened to be launched from — there is a stray
+/// `debian_12.qcow2` in the project directory from exactly that.
+pub fn default_vm_dir() -> PathBuf {
+    const FOLDER: &str = "FARO-VMs";
+
+    #[cfg(target_os = "windows")]
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(profile).join(FOLDER);
+    }
+    #[cfg(not(target_os = "windows"))]
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(FOLDER);
+    }
+
+    let config = default_config_dir();
+    if config.is_absolute() {
+        return config.join(FOLDER);
+    }
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(FOLDER)
+}
+
+/// Names Windows refuses as a file or folder, whatever the extension.
+const RESERVED_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// A folder name for a VM called `name`.
+///
+/// A VM name is free text: it can hold path separators, drive colons,
+/// wildcards, nothing but dots, or one of the device names Windows reserves.
+/// None of those can be a folder, and a name is no reason to refuse to create
+/// a machine — so whatever cannot be used is replaced, and a name that leaves
+/// nothing behind falls back to the VM's own id.
+pub fn vm_folder_name(name: &str, id: Uuid) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '.' | '_' | '-') {
+            out.push(ch);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    // Collapse the runs the replacement above can create, then drop anything
+    // at the edges that a folder name cannot end on.
+    while out.contains("--") {
+        out = out.replace("--", "-");
+    }
+    let trimmed = out.trim_matches(|c: char| c == '.' || c == '-' || c == ' ');
+
+    let reserved = RESERVED_NAMES
+        .iter()
+        .any(|r| trimmed.eq_ignore_ascii_case(r));
+    if trimmed.is_empty() || reserved {
+        return format!("vm-{}", &id.simple().to_string()[..8]);
+    }
+    trimmed.to_string()
+}
+
+/// Name of the marker file that says which VM owns a folder.
+const OWNER_MARKER: &str = "vm-id";
+
+/// Create and return the folder that belongs to this VM.
+///
+/// Calling it twice for the same VM gives the same folder; calling it for a
+/// second VM of the same name gives a different one. That second part is not
+/// cosmetic: two QEMU processes writing one qcow2 destroy it, so two machines
+/// must never share a folder. Ownership is read from a marker file, because a
+/// folder name on its own does not say whose it is.
+pub fn claim_vm_folder(root: &Path, name: &str, id: Uuid) -> Result<PathBuf, String> {
+    let preferred = root.join(vm_folder_name(name, id));
+    let chosen = if folder_is_free_or_ours(&preferred, id) {
+        preferred
+    } else {
+        let fallback = root.join(format!(
+            "{}-{}",
+            vm_folder_name(name, id),
+            &id.simple().to_string()[..8]
+        ));
+        // The fallback is checked too. An id collision in the first eight hex
+        // digits is unlikely, but adopting a folder that belongs to another
+        // machine would put two QEMU processes on one disk, and the check is
+        // one file read.
+        if folder_is_free_or_ours(&fallback, id) {
+            fallback
+        } else {
+            return Err(format!(
+                "Both candidate folders under {} belong to other machines",
+                root.display()
+            ));
+        }
+    };
+
+    std::fs::create_dir_all(&chosen)
+        .map_err(|e| format!("Failed to create {}: {}", chosen.display(), e))?;
+    let marker = chosen.join(OWNER_MARKER);
+    if !marker.exists() {
+        std::fs::write(&marker, id.to_string())
+            .map_err(|e| format!("Failed to write {}: {}", marker.display(), e))?;
+    }
+    Ok(chosen)
+}
+
+/// Whether `folder` can be used by the VM with this `id`.
+fn folder_is_free_or_ours(folder: &Path, id: Uuid) -> bool {
+    !folder.exists() || folder_belongs_to(folder, id)
+}
+
+/// Whether `folder` exists and its marker names this VM.
+///
+/// Deletion asks this, not `folder_is_free_or_ours`: a folder that is simply
+/// not there answers "free" to that one, and nothing may be removed on the
+/// strength of an absent marker.
+fn folder_belongs_to(folder: &Path, id: Uuid) -> bool {
+    std::fs::read_to_string(folder.join(OWNER_MARKER))
+        .is_ok_and(|owner| owner.trim() == id.to_string())
+}
+
+/// Every folder under `root` whose marker names this VM.
+///
+/// Reading the marker rather than rebuilding the name from the VM's is what
+/// makes this survive a rename: the folder keeps whatever name it was created
+/// with, and the marker is the only thing that says whose it is. Only direct
+/// children of `root` are considered, so nothing outside the VM directory can
+/// ever be named here.
+///
+/// The answer is a list, not one folder, because a marker is a file and files
+/// get copied. Someone who duplicates a VM folder in Explorer before a risky
+/// change has two folders claiming the same machine, and picking whichever
+/// the directory lists first is a coin toss over their backup. Callers that
+/// delete must decide deliberately what to do with more than one.
+pub fn find_vm_folders(root: &Path, id: Uuid) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && folder_belongs_to(path, id))
+        .collect()
+}
+
+/// Where a path lies relative to `root`.
+///
+/// `Unresolvable` is its own answer and not a kind of `Outside`: a file the
+/// user deleted in Explorer, or one on a drive that is not mounted, is not a
+/// file somewhere else. Reporting it as "outside the VM directory" would be
+/// false in both halves, and the messages built on this say what they will
+/// not do about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Containment {
+    Inside,
+    Outside,
+    Unresolvable,
+}
+
+/// Whether `path` sits inside `root`.
+///
+/// Both sides are resolved first, so a path woven out of `..` cannot present
+/// itself as a child.
+pub fn containment(root: &Path, path: &Path) -> Containment {
+    let Ok(root) = root.canonicalize() else {
+        return Containment::Unresolvable;
+    };
+    match path.canonicalize() {
+        Ok(path) if path != root && path.starts_with(&root) => Containment::Inside,
+        Ok(_) => Containment::Outside,
+        // A path that does not resolve may still be named inside the
+        // directory; what it is not is a file somewhere else.
+        Err(_) => Containment::Unresolvable,
+    }
+}
+
+/// Whether `path` sits inside `root` — the test deletion has to pass.
+pub fn is_inside(root: &Path, path: &Path) -> bool {
+    containment(root, path) == Containment::Inside
 }
 
 /// Why a configuration file could not be loaded.
@@ -547,7 +790,14 @@ pub fn load_settings(path: &Path) -> AppSettings {
 
 /// Save application settings to a JSON file.
 pub fn save_settings(path: &Path, settings: &AppSettings) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(settings)
+    // The marker goes in on every save, whatever the caller holds. Without it
+    // the next start would read this installation as a fresh one and change
+    // which way the New button takes.
+    let stamped = AppSettings {
+        schema: Some(SETTINGS_SCHEMA),
+        ..settings.clone()
+    };
+    let json = serde_json::to_string_pretty(&stamped)
         .map_err(|e| format!("Failed to serialize app settings: {}", e))?;
     write_config_file(path, json.as_bytes())
 }

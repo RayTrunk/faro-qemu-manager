@@ -58,7 +58,7 @@ fn test_create_disk_state_lifecycle() {
     assert!(state.path_buf.is_empty());
     assert_eq!(state.status_msg, None);
 
-    state.open_dialog("ubuntu_disk.qcow2");
+    state.open_dialog(None, "ubuntu_disk.qcow2");
     assert!(state.open);
     assert_eq!(state.path_buf, "ubuntu_disk.qcow2");
     assert_eq!(state.status_msg, None);
@@ -70,9 +70,31 @@ fn test_create_disk_state_lifecycle() {
     assert!(!state.open);
 
     // Reopening clears previous status message
-    state.open_dialog("");
+    state.open_dialog(None, "");
     assert!(state.open);
     assert_eq!(state.status_msg, None);
+}
+
+#[test]
+fn test_a_second_disk_is_proposed_inside_the_machines_own_folder() {
+    // Spec 5.7: a bare filename lands wherever the app was launched from,
+    // which is how a stray debian_12.qcow2 ends up in the project directory.
+    let base = PathBuf::from(r"C:\Users\someone\FARO-VMs\Debian");
+    let mut state = CreateDiskState::default();
+
+    state.open_dialog(Some(&base), "second.qcow2");
+
+    let proposed = PathBuf::from(&state.path_buf);
+    assert!(
+        proposed.is_absolute(),
+        "a bare name is written next to the executable, got: {}",
+        state.path_buf
+    );
+    assert!(
+        proposed.starts_with(&base),
+        "the machine's own folder is where its disks belong, got: {}",
+        state.path_buf
+    );
 }
 
 #[test]
@@ -643,4 +665,68 @@ fn test_a_stored_accelerator_that_is_gone_is_marked_not_silently_replaced() {
         "drew:\n{}",
         drawn
     );
+}
+
+// Part 3a, task 6
+#[test]
+fn test_the_panel_shows_what_would_stop_the_start() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let findings = vec![
+        faro_qem::preflight::Finding {
+            severity: faro_qem::preflight::Severity::Blocking,
+            text: "NO DISK AT C:/nope/disk.qcow2".to_string(),
+        },
+        faro_qem::preflight::Finding {
+            severity: faro_qem::preflight::Severity::Warning,
+            text: "MORE MEMORY THAN THE HOST HAS".to_string(),
+        },
+    ];
+
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&caps)
+                    .with_findings(&findings)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    for finding in &findings {
+        assert!(
+            drawn.contains(&finding.text),
+            "missing {:?}, drew:\n{}",
+            finding.text,
+            drawn
+        );
+    }
+}
+
+#[test]
+fn test_a_panel_without_findings_draws_none_of_them() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&caps)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(!drawn.contains("NO DISK AT"));
 }

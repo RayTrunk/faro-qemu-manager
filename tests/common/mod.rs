@@ -157,3 +157,78 @@ pub fn rendered_text(output: &egui::FullOutput) -> String {
     }
     out
 }
+
+/// Keys present in one locale catalogue, read from the file.
+///
+/// `I18n::t` falls back to English for a missing key, so asking it whether a
+/// key "exists" cannot tell a German entry apart from an English one standing
+/// in for it. The files are the only honest source.
+pub fn catalogue_keys(lang: &str) -> std::collections::BTreeSet<String> {
+    let path = format!("assets/locales/{}.json", lang);
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {}", path, e));
+    let map: std::collections::BTreeMap<String, String> = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("{} is not a catalogue: {}", path, e));
+    map.into_keys().collect()
+}
+
+/// Every Rust source file under `dir`, concatenated.
+///
+/// Used to ask questions about the whole interface at once — whether a key is
+/// referenced anywhere, whether a hardcoded string survived — which no single
+/// file can answer. `dir` is a subtree so that part 4 can ask the same
+/// question about one module.
+pub fn concat_sources(dir: &str) -> String {
+    fn walk(dir: &Path, out: &mut String) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    out.push_str(&text);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+
+    let mut out = String::new();
+    walk(Path::new(dir), &mut out);
+    assert!(!out.is_empty(), "no Rust sources under {}", dir);
+    out
+}
+
+/// An app whose VM folders go into `vm_dir`.
+///
+/// Used from three test files, which is why it lives here rather than being
+/// copied into each.
+pub fn app_with_vm_dir(vm_dir: &Path) -> faro_qem::app::FaroQemApp {
+    let parent = vm_dir.parent().unwrap_or(vm_dir);
+    let mut app = faro_qem::app::FaroQemApp::with_paths(
+        parent.join("settings.json"),
+        parent.join("vms.json"),
+        None,
+    );
+    app.settings.vm_dir = Some(vm_dir.to_path_buf());
+    app
+}
+
+/// Everything the settings dialog draws, after a layout pass.
+pub fn rendered_settings(
+    settings: &mut faro_qem::config::AppSettings,
+    i18n: &mut faro_qem::i18n::I18n,
+) -> String {
+    let ctx = egui::Context::default();
+    let mut open = true;
+    let _ = ctx.run(Default::default(), |ctx| {
+        faro_qem::ui::SettingsDialog::new(&mut open, settings, i18n).show(ctx);
+    });
+    let output = ctx.run(Default::default(), |ctx| {
+        faro_qem::ui::SettingsDialog::new(&mut open, settings, i18n).show(ctx);
+    });
+    rendered_text(&output)
+}

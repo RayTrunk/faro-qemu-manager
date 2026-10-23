@@ -160,6 +160,10 @@ fn test_failing_save_is_reported_to_the_user() {
     app.notices.clear();
 
     // Make the target unwritable by putting a directory in its place.
+    // This test is about a save that fails, so it needs the way that saves:
+    // the wizard way opens a dialog and writes nothing yet.
+    app.settings.creation_mode = faro_qem::config::CreationMode::Direct;
+
     let blocked = dir.path().join("blocked").join("vms.json");
     std::fs::create_dir_all(&blocked).unwrap();
     app.vms_path = blocked;
@@ -321,6 +325,10 @@ fn test_repeated_save_failures_do_not_pile_up() {
         None,
     );
     app.notices.clear();
+
+    // This test is about a save that fails, so it needs the way that saves:
+    // the wizard way opens a dialog and writes nothing yet.
+    app.settings.creation_mode = faro_qem::config::CreationMode::Direct;
 
     let blocked = dir.path().join("blocked").join("vms.json");
     std::fs::create_dir_all(&blocked).unwrap();

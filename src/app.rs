@@ -7,15 +7,17 @@ use std::sync::mpsc;
 use uuid::Uuid;
 
 use crate::config::{
-    default_settings_path, default_vms_path, quarantine_file, recovery_for, save_settings,
-    save_vms, try_load_settings, try_load_vms, AppSettings, ConfigLoadError, ConfigRecovery,
+    claim_vm_folder, containment, default_settings_path, default_vms_path, find_vm_folders,
+    is_inside, quarantine_file, recovery_for, save_settings, save_vms, try_load_settings,
+    try_load_vms, AppSettings, ConfigLoadError, ConfigRecovery, Containment, CreationMode,
     Firmware, VmConfig,
 };
 use crate::i18n::I18n;
+use crate::preflight::{blocks, check_vm, Finding, HostFacts};
 use crate::qemu::{
-    build_qemu_args, find_qemu_binary, find_qemu_img, find_uefi_firmware, nvram_path_for,
-    prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent, UefiFirmware,
-    VmProcess,
+    build_qemu_args, create_disk_image, find_qemu_binary, find_qemu_img, find_uefi_firmware,
+    nvram_path_for, prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent,
+    UefiFirmware, VmProcess,
 };
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
@@ -23,6 +25,7 @@ use crate::ui::settings::SettingsDialog;
 use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
 use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
 use crate::ui::vm_detail::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
+use crate::ui::wizard::{WizardAction, WizardDialog, WizardState};
 
 /// FARO QEMU MANAGER central application state
 pub struct FaroQemApp {
@@ -58,6 +61,24 @@ pub struct FaroQemApp {
     /// time as the capabilities. Searching for it is a handful of `is_file`
     /// calls, which is fine once and wrong once per frame.
     pub uefi_firmware: Option<UefiFirmware>,
+    /// The template wizard, when the settings take that way.
+    pub wizard: WizardState,
+    /// Whether the user ticked "take the folder and files" in the delete box.
+    /// Never pre-ticked, and reset every time the box opens.
+    pub delete_with_folder: bool,
+    /// The folder the delete box offers to take, worked out once when the box
+    /// opens: finding it reads a directory, which is not a per-frame job.
+    pub delete_folder: Option<PathBuf>,
+    /// Which VM `delete_folder` was worked out for.
+    pub delete_folder_for: Option<Uuid>,
+    /// The selected machine's own folder, so the detail panel can propose
+    /// new files inside it. Worked out when the selection changes, because
+    /// finding it reads a directory.
+    pub selected_folder: Option<PathBuf>,
+    /// Which VM `selected_folder` was worked out for.
+    pub selected_folder_for: Option<Uuid>,
+    /// What this host has, asked once. The start check compares against it.
+    pub host: HostFacts,
 }
 
 /// Short, human-facing name for a configuration path.
@@ -179,6 +200,15 @@ impl FaroQemApp {
             }
         };
 
+        // Spec 11.7: no schema marker beside an existing machine list means
+        // this installation predates the wizard, and it keeps the way it
+        // knows. A plain serde default could not tell the two apart.
+        let mut settings = settings;
+        if settings.schema.is_none() && vms_path.exists() {
+            settings.creation_mode = CreationMode::Direct;
+        }
+        let settings = settings;
+
         let i18n = I18n::new(&settings.language);
 
         // A VM list that exists but could not be loaded is the user's data.
@@ -247,6 +277,13 @@ impl FaroQemApp {
             settings_write_blocked,
             capabilities,
             uefi_firmware,
+            wizard: WizardState::default(),
+            delete_with_folder: false,
+            delete_folder: None,
+            delete_folder_for: None,
+            selected_folder: None,
+            selected_folder_for: None,
+            host: HostFacts::probe(),
         }
     }
 
@@ -302,6 +339,265 @@ impl FaroQemApp {
                 e
             )
         })
+    }
+
+    /// Create the machine the wizard drew up.
+    ///
+    /// The order matters, so that a failure leaves nothing behind: claim the
+    /// folder, move the paths into it, make the disk, make the variable
+    /// store, and only then put the machine in the list. Every step before
+    /// the last returns an error instead, and the list is untouched.
+    ///
+    /// The variable store comes after the disk because its path is derived
+    /// from the disk's folder; the other way round the store would land
+    /// beside the old disk and the machine would not start.
+    pub fn create_from_wizard(&mut self, draft: VmConfig, disk_gb: u32) -> Result<Uuid, String> {
+        let mut vm = draft;
+        let root = self.settings.vm_dir_or_default();
+        let folder = claim_vm_folder(&root, &vm.name, vm.id)?;
+
+        if let Some(drive) = vm.drives.first_mut() {
+            let file_name = drive
+                .path
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from("disk.qcow2"));
+            drive.path = folder.join(file_name);
+        }
+        if matches!(vm.firmware, Firmware::Uefi { .. }) {
+            // `nvram_path_for` derives the store's path from the first
+            // drive's folder. A machine with no drive -- the empty tile, or
+            // one switched to UEFI before a disk exists -- would get a
+            // relative path, and a relative path is written next to the
+            // executable. The claimed folder is where it belongs.
+            let derived = nvram_path_for(&vm);
+            vm.firmware = Firmware::Uefi {
+                nvram: if derived.is_absolute() {
+                    derived
+                } else {
+                    folder.join(derived.file_name().unwrap_or(derived.as_os_str()))
+                },
+            };
+        }
+
+        if let Some(drive) = vm.drives.first() {
+            if !drive.path.is_file() {
+                let qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref())
+                    .ok_or_else(|| "qemu-img was not found; cannot create a disk".to_string())?;
+                create_disk_image(&qemu_img, &drive.path, drive.format, disk_gb)?;
+            }
+        }
+        self.ensure_nvram(&vm)?;
+
+        let id = vm.id;
+        self.vms.push(vm);
+        self.selected_vm_id = Some(id);
+        self.save_vms_now();
+        Ok(id)
+    }
+
+    /// Duplicate a machine so that the copy owns everything it writes to.
+    ///
+    /// Two QEMU processes writing one qcow2 destroy it, so a copy that shares
+    /// the original's image is not a copy but a trap. Every image that lies
+    /// inside the VM directory is copied into the new machine's own folder.
+    /// An image outside it is left where it is and the two machines do share
+    /// it — that file is the user's, not ours to duplicate into a place they
+    /// never chose — and the sharing is said out loud instead of being
+    /// discovered later as corruption.
+    fn duplicate_vm(&mut self, id: Uuid) {
+        let Some(pos) = self.vms.iter().position(|v| v.id == id) else {
+            return;
+        };
+        let mut cloned = self.vms[pos].clone();
+        cloned.id = Uuid::new_v4();
+        cloned.name = format!("{} (Copy)", cloned.name);
+        let new_id = cloned.id;
+
+        let root = self.settings.vm_dir_or_default();
+
+        // What becomes of each image is decided before anything is copied,
+        // so that no control-flow path can skip a drive and leave it shared
+        // in silence. Every drive gets exactly one fate, and every fate that
+        // is not a copy is reported by name.
+        let mut shared: Vec<(PathBuf, &'static str, String)> = Vec::new();
+        let mut to_copy: Vec<usize> = Vec::new();
+        for (index, drive) in cloned.drives.iter().enumerate() {
+            match containment(&root, &drive.path) {
+                Containment::Inside => to_copy.push(index),
+                Containment::Outside => {
+                    shared.push((drive.path.clone(), "duplicate_image_shared", String::new()))
+                }
+                Containment::Unresolvable => {
+                    shared.push((drive.path.clone(), "duplicate_image_missing", String::new()))
+                }
+            }
+        }
+
+        // The folder is claimed once, and only when there is something to put
+        // in it: a copy whose images all live elsewhere gets no empty folder.
+        // If the claim fails, every image that was going to be copied becomes
+        // a shared one — which is what it is — and is named as such.
+        let folder = if to_copy.is_empty() {
+            None
+        } else {
+            match claim_vm_folder(&root, &cloned.name, new_id) {
+                Ok(dir) => Some(dir),
+                Err(e) => {
+                    for index in std::mem::take(&mut to_copy) {
+                        shared.push((
+                            cloned.drives[index].path.clone(),
+                            "duplicate_folder_failed",
+                            e.clone(),
+                        ));
+                    }
+                    None
+                }
+            }
+        };
+
+        if let Some(dir) = folder {
+            for index in to_copy {
+                let source = cloned.drives[index].path.clone();
+                let file_name = source
+                    .file_name()
+                    .map(|n| n.to_os_string())
+                    .unwrap_or_else(|| std::ffi::OsString::from("disk.qcow2"));
+                let target = dir.join(file_name);
+                match std::fs::copy(&source, &target) {
+                    Ok(_) => cloned.drives[index].path = target,
+                    Err(e) => shared.push((source, "duplicate_image_copy_failed", e.to_string())),
+                }
+            }
+        }
+
+        let mut problems: Vec<String> = shared
+            .into_iter()
+            .map(|(path, key, detail)| {
+                self.i18n.tf(
+                    key,
+                    &[
+                        ("path", &path.display().to_string()),
+                        ("error", detail.as_str()),
+                    ],
+                )
+            })
+            .collect();
+        if let Some(problem) = self.rebase_nvram(&mut cloned) {
+            problems.push(problem);
+        }
+        for problem in problems {
+            self.push_notice(Notice::warning(problem));
+        }
+        self.vms.push(cloned);
+        self.selected_vm_id = Some(new_id);
+        self.save_vms_now();
+    }
+
+    /// The folder deleting this machine may take, if there is exactly one
+    /// answer that is not a guess.
+    ///
+    /// Three things can go wrong, and each ends in `None` rather than in a
+    /// choice made on the user's behalf:
+    ///
+    /// - **No folder claims the machine.** Nothing to offer.
+    /// - **Several do.** A marker is a file, and files get copied: someone who
+    ///   duplicated the folder in Explorer before a risky change has two.
+    ///   The folder holding the machine's first disk breaks the tie, because
+    ///   that is the one the machine actually runs from. With no disk to go
+    ///   by, nothing is offered — destroying the wrong directory is worse
+    ///   than leaving both.
+    /// - **Another machine keeps files there.** The user pointed a second
+    ///   VM's disk into this folder. That machine's dialog never mentioned
+    ///   this path, so taking it would delete a disk behind the user's back.
+    pub fn folder_to_delete_with(&self, id: Uuid) -> Option<PathBuf> {
+        let vm = self.vms.iter().find(|v| v.id == id)?;
+        let root = self.settings.vm_dir_or_default();
+        let candidates = find_vm_folders(&root, id);
+
+        let folder = match candidates.len() {
+            0 => return None,
+            1 => candidates.into_iter().next()?,
+            _ => {
+                let own = vm.drives.first()?.path.parent()?.canonicalize().ok()?;
+                candidates
+                    .into_iter()
+                    .find(|c| c.canonicalize().ok().as_deref() == Some(own.as_path()))?
+            }
+        };
+
+        let lodger = self.vms.iter().filter(|v| v.id != id).any(|other| {
+            other
+                .drives
+                .iter()
+                .map(|d| d.path.as_path())
+                .chain(other.cdroms.iter().map(|p| p.as_path()))
+                .chain(match &other.firmware {
+                    Firmware::Uefi { nvram } => Some(nvram.as_path()),
+                    Firmware::Bios { rom } => rom.as_deref(),
+                })
+                .any(|path| is_inside(&folder, path))
+        });
+
+        (!lodger).then_some(folder)
+    }
+
+    /// Remove a machine, and its folder only if the user asked for that.
+    ///
+    /// `with_folder` is the box in the delete dialog, which is never
+    /// pre-ticked. Even with it ticked, only the folder whose marker names
+    /// this VM and that is a direct child of the VM directory is removed: a
+    /// disk the user pointed at their own documents must not drag that
+    /// directory away with it.
+    pub fn delete_vm(&mut self, id: Uuid, with_folder: bool) {
+        let folder = with_folder
+            .then(|| self.folder_to_delete_with(id))
+            .flatten();
+
+        let _ = self.stop_vm(id);
+        self.status_map.remove(&id);
+        self.console_logs.remove(&id);
+        self.cli_previews.remove(&id);
+
+        if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
+            self.vms.remove(pos);
+            self.save_vms_now();
+            if self.selected_vm_id == Some(id) {
+                if self.vms.is_empty() {
+                    self.selected_vm_id = None;
+                } else if pos < self.vms.len() {
+                    self.selected_vm_id = Some(self.vms[pos].id);
+                } else {
+                    self.selected_vm_id = Some(self.vms[pos - 1].id);
+                }
+            }
+        }
+
+        // The folder goes last: a failure here must not leave a machine in
+        // the list that points at files already gone.
+        if let Some(folder) = folder {
+            if let Err(e) = std::fs::remove_dir_all(&folder) {
+                let text = self.i18n.tf(
+                    "delete_folder_failed",
+                    &[
+                        ("path", &folder.display().to_string()),
+                        ("error", &e.to_string()),
+                    ],
+                );
+                self.push_notice(Notice::warning(text));
+            }
+        }
+    }
+
+    /// Everything worth saying about this machine before it starts.
+    pub fn findings_for(&self, vm: &VmConfig) -> Vec<Finding> {
+        check_vm(
+            vm,
+            &self.host,
+            Some(&self.capabilities),
+            self.uefi_firmware.as_ref(),
+            &self.i18n,
+        )
     }
 
     /// Make sure a UEFI machine has the variable store QEMU demands.
@@ -472,6 +768,30 @@ impl FaroQemApp {
             return Err(err_msg);
         }
 
+        // The check runs after ensure_nvram, not before: the variable store
+        // is ours to create, and a machine must not be held for a file the
+        // app was about to write. What remains missing is someone else's.
+        let findings = self.findings_for(&vm);
+        if blocks(&findings) {
+            let err_msg = findings
+                .iter()
+                .map(|f| f.text.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.status_map.insert(id, VmStatus::Error(err_msg.clone()));
+            let log_buf = self.console_logs.entry(id).or_default();
+            for finding in &findings {
+                log_buf.push_error(&finding.text);
+            }
+            return Err(err_msg);
+        }
+        if !findings.is_empty() {
+            let log_buf = self.console_logs.entry(id).or_default();
+            for finding in &findings {
+                log_buf.push_system(finding.text.clone());
+            }
+        }
+
         let args = match build_qemu_args(&vm, self.uefi_firmware.as_ref()) {
             Ok(args) => args,
             Err(err_msg) => {
@@ -528,6 +848,12 @@ impl FaroQemApp {
             SidebarAction::SelectVm(id) => {
                 self.selected_vm_id = Some(id);
             }
+            SidebarAction::NewVm if self.settings.creation_mode == CreationMode::Wizard => {
+                self.wizard = WizardState {
+                    open: true,
+                    ..Default::default()
+                };
+            }
             SidebarAction::NewVm => {
                 let mut new_vm = VmConfig::default();
                 new_vm.id = Uuid::new_v4();
@@ -541,37 +867,10 @@ impl FaroQemApp {
                 self.save_vms_now();
             }
             SidebarAction::DuplicateVm(id) => {
-                if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
-                    let mut cloned = self.vms[pos].clone();
-                    cloned.id = Uuid::new_v4();
-                    cloned.name = format!("{} (Copy)", cloned.name);
-                    let new_id = cloned.id;
-                    if let Some(problem) = self.rebase_nvram(&mut cloned) {
-                        self.push_notice(Notice::warning(problem));
-                    }
-                    self.vms.push(cloned);
-                    self.selected_vm_id = Some(new_id);
-                    self.save_vms_now();
-                }
+                self.duplicate_vm(id);
             }
-            SidebarAction::DeleteVm(id) => {
-                let _ = self.stop_vm(id);
-                self.status_map.remove(&id);
-                self.console_logs.remove(&id);
-                self.cli_previews.remove(&id);
-                if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
-                    self.vms.remove(pos);
-                    self.save_vms_now();
-                    if self.selected_vm_id == Some(id) {
-                        if self.vms.is_empty() {
-                            self.selected_vm_id = None;
-                        } else if pos < self.vms.len() {
-                            self.selected_vm_id = Some(self.vms[pos].id);
-                        } else {
-                            self.selected_vm_id = Some(self.vms[pos - 1].id);
-                        }
-                    }
-                }
+            SidebarAction::DeleteVm { id, with_folder } => {
+                self.delete_vm(id, with_folder);
             }
             SidebarAction::OpenSettings => {
                 self.settings_open = true;
@@ -606,10 +905,8 @@ impl FaroQemApp {
             }
             ui.add_space(16.0);
             ui.label(
-                egui::RichText::new(
-                    "Select a virtual machine from the sidebar or create a new one.",
-                )
-                .color(ui.visuals().weak_text_color()),
+                egui::RichText::new(self.i18n.t("empty_state_hint"))
+                    .color(ui.visuals().weak_text_color()),
             );
             ui.add_space(20.0);
             let create_btn = egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
@@ -773,6 +1070,21 @@ impl FaroQemApp {
         }
 
         // 3. Sidebar Navigation Panel
+        //
+        // The folder the delete box would offer is worked out when the box
+        // opens, not on every frame: finding it reads a directory. Opening
+        // the box also clears the tick, so consent is never inherited from
+        // the last machine the user deleted.
+        if self.delete_folder_for != self.confirming_delete_id {
+            self.delete_folder_for = self.confirming_delete_id;
+            self.delete_with_folder = false;
+            self.delete_folder = self
+                .confirming_delete_id
+                .and_then(|id| self.folder_to_delete_with(id));
+        }
+        let delete_folder = self.delete_folder.clone();
+        let delete_folder_for = self.delete_folder_for;
+
         let mut sidebar_action = None;
         egui::SidePanel::left("sidebar_panel")
             .resizable(true)
@@ -788,6 +1100,11 @@ impl FaroQemApp {
                     &self.i18n,
                 )
                 .with_delete_confirmation(&mut self.confirming_delete_id)
+                .with_delete_folder(
+                    &mut self.delete_with_folder,
+                    delete_folder.as_deref(),
+                    delete_folder_for,
+                )
                 .with_logo(self.logo_texture.as_ref())
                 .show(ui);
             });
@@ -797,6 +1114,19 @@ impl FaroQemApp {
         }
 
         // 4. Central Content Panel
+        //
+        // The selected machine's folder is worked out when the selection
+        // changes, not on every frame: finding it reads a directory. The
+        // detail panel needs it so a second disk is proposed beside the
+        // machine's other files rather than next to the executable.
+        if self.selected_folder_for != self.selected_vm_id {
+            self.selected_folder_for = self.selected_vm_id;
+            self.selected_folder = self
+                .selected_vm_id
+                .and_then(|id| find_vm_folders(&self.settings.vm_dir_or_default(), id).pop());
+        }
+        let selected_folder = self.selected_folder.clone();
+
         let mut detail_action = None;
         let mut empty_state_create = false;
 
@@ -811,6 +1141,7 @@ impl FaroQemApp {
                     let pid = self.status_map.get(&id).and_then(|s| s.pid());
                     let cli_cmd = self.cli_previews.get(&id).map(|s| s.as_str());
                     let qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref());
+                    let findings = self.findings_for(&self.vms[pos]);
 
                     let console_buf = self.console_logs.entry(id).or_default();
                     let mut view = VmDetailView::new(
@@ -821,10 +1152,12 @@ impl FaroQemApp {
                         qemu_img.as_deref(),
                         &mut self.create_disk_modal,
                     )
+                    .with_vm_folder(selected_folder.as_deref())
                     .with_console(console_buf)
                     .with_logo(self.logo_texture.as_ref())
                     .with_capabilities(&self.capabilities)
-                    .with_firmware(self.uefi_firmware.is_some());
+                    .with_firmware(self.uefi_firmware.is_some())
+                    .with_findings(&findings);
 
                     if let Some(p) = pid {
                         view = view.with_pid(p);
@@ -862,6 +1195,36 @@ impl FaroQemApp {
             }
         }
 
+        // 5b. The template wizard
+        if self.wizard.open {
+            let action = WizardDialog::new(&mut self.wizard, &self.i18n)
+                .with_capabilities(&self.capabilities)
+                .with_firmware(self.uefi_firmware.is_some())
+                .with_default_arch(self.settings.default_arch)
+                .show(ctx);
+            match action {
+                Some(WizardAction::Create { vm, disk_gb }) => {
+                    let name = vm.name.clone();
+                    match self.create_from_wizard(vm, disk_gb) {
+                        Ok(_) => self.wizard.created(),
+                        Err(e) => {
+                            // Nothing was added to the list. The dialog comes
+                            // back with the template, the name and the ISO
+                            // still in it, so the one thing that was wrong is
+                            // the only thing to fix.
+                            self.push_notice(Notice::error(format!(
+                                "{}: {}",
+                                self.i18n.tf("create_failed", &[("name", &name)]),
+                                e
+                            )));
+                            self.wizard.creation_failed();
+                        }
+                    }
+                }
+                Some(WizardAction::Cancel) | None => {}
+            }
+        }
+
         // 6. About Dialog
         if self.about_open {
             let mut is_open = self.about_open;
@@ -878,16 +1241,16 @@ impl FaroQemApp {
                             ui.image((logo.id(), egui::vec2(64.0, 64.0)));
                             ui.add_space(6.0);
                         }
-                        ui.heading("FARO QEMU MANAGER");
+                        ui.heading(self.i18n.t("app_title"));
                         ui.label(
-                            egui::RichText::new("(C) R.Trunk 2026")
+                            egui::RichText::new(self.i18n.t("app_copyright"))
                                 .strong()
                                 .size(12.0)
                                 .color(ui.visuals().weak_text_color()),
                         );
                         ui.add_space(8.0);
-                        ui.label("Modern QEMU Virtual Machine Manager");
-                        ui.label("Swiss High-Modernist Desktop Interface");
+                        ui.label(self.i18n.t("app_tagline"));
+                        ui.label(self.i18n.t("app_subtitle"));
                         ui.add_space(12.0);
                         if ui.button(self.i18n.t("close")).clicked() {
                             self.about_open = false;

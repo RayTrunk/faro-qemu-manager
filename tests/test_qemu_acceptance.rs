@@ -439,3 +439,37 @@ fn test_qemu_accepts_the_arguments_built_for_a_non_x86_machine() {
         common::assert_accepted(arch.as_str(), arch, &args_for(&vm));
     }
 }
+
+// --------------------------------------------------------------------------
+// Every template, asked of the installed QEMU
+//
+// Spec section 10 requires this: for each of the six templates the generated
+// command line goes into a test that starts it. The four bugs of section 3.1
+// could never have happened with it.
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_qemu_accepts_the_command_line_of_every_template() {
+    let dir = tempfile::tempdir().unwrap();
+    for t in faro_qem::templates::VmTemplate::all() {
+        let folder = dir.path().join(t.key);
+        std::fs::create_dir_all(&folder).unwrap();
+
+        let mut vm = t.instantiate(t.name, &folder);
+        // The template sizes are for real use; parallel probes holding 8 GB
+        // each exhaust the host and QEMU answers "cannot set up guest memory",
+        // which reads exactly like a rejection.
+        vm.memory_mb = PROBE_MEMORY_MB;
+        common::make_empty_qcow2(&vm.drives[0].path);
+
+        if let Firmware::Uefi { nvram } = &vm.firmware {
+            let Some(uefi) = find_uefi_firmware(None) else {
+                eprintln!("skipped {}: no edk2 firmware on this machine", t.key);
+                continue;
+            };
+            prepare_nvram(&uefi.vars_template, nvram).expect("nvram copy");
+        }
+
+        common::assert_accepted(t.key, vm.arch, &args_for(&vm));
+    }
+}

@@ -1,6 +1,8 @@
 // FARO QEMU MANAGER (C) R.Trunk 2026
 // Unit tests for Sidebar and Settings Dialog components
 
+mod common;
+
 use egui::Context;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -183,13 +185,22 @@ fn test_sidebar_actions_variants() {
     let sel = SidebarAction::SelectVm(id);
     let new_vm = SidebarAction::NewVm;
     let dup = SidebarAction::DuplicateVm(id);
-    let del = SidebarAction::DeleteVm(id);
+    let del = SidebarAction::DeleteVm {
+        id,
+        with_folder: false,
+    };
     let settings = SidebarAction::OpenSettings;
 
     assert_eq!(sel, SidebarAction::SelectVm(id));
     assert_eq!(new_vm, SidebarAction::NewVm);
     assert_eq!(dup, SidebarAction::DuplicateVm(id));
-    assert_eq!(del, SidebarAction::DeleteVm(id));
+    assert_eq!(
+        del,
+        SidebarAction::DeleteVm {
+            id,
+            with_folder: false
+        }
+    );
     assert_eq!(settings, SidebarAction::OpenSettings);
     assert_ne!(new_vm, settings);
 }
@@ -265,6 +276,9 @@ fn test_settings_dialog_open_rendering() {
         language: "en".to_string(),
         theme: "dark".to_string(),
         default_arch: Arch::X86_64,
+        vm_dir: None,
+        creation_mode: Default::default(),
+        schema: None,
     };
     let mut open = true;
 
@@ -335,4 +349,139 @@ fn test_settings_dialog_qemu_dir_modification() {
     // Clear path
     settings.qemu_dir = None;
     assert_eq!(settings.qemu_dir, None);
+}
+
+#[test]
+fn test_the_settings_dialog_offers_the_vm_directory_and_the_creation_mode() {
+    let i18n = I18n::new("en");
+    let mut settings = AppSettings::default();
+    let mut dialog_i18n = I18n::new("en");
+    let drawn = common::rendered_settings(&mut settings, &mut dialog_i18n);
+    assert!(drawn.contains(i18n.t("vm_dir")), "drew:\n{}", drawn);
+    assert!(drawn.contains(i18n.t("creation_mode")), "drew:\n{}", drawn);
+    assert!(
+        drawn.contains(i18n.t("creation_mode_wizard")),
+        "drew:\n{}",
+        drawn
+    );
+    assert!(
+        drawn.contains(i18n.t("creation_mode_direct")),
+        "drew:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_the_creation_mode_texts_are_in_all_three_catalogues() {
+    for lang in ["en", "de", "fr"] {
+        let keys = common::catalogue_keys(lang);
+        for key in [
+            "vm_dir",
+            "creation_mode",
+            "creation_mode_wizard",
+            "creation_mode_direct",
+        ] {
+            assert!(keys.contains(key), "{} missing in {}", key, lang);
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
+// The delete dialog's consent box: the one irreversible thing in the app
+// --------------------------------------------------------------------------
+
+/// Everything the sidebar draws with the delete dialog open for `vm`.
+fn rendered_delete_dialog(
+    vm: &VmConfig,
+    folder: Option<&std::path::Path>,
+    folder_for: Option<Uuid>,
+    consent: &mut bool,
+) -> String {
+    let ctx = Context::default();
+    let i18n = I18n::new("en");
+    let vms = vec![vm.clone()];
+    let statuses = HashMap::new();
+    let mut search = String::new();
+    let mut confirm = Some(vm.id);
+
+    // Twice: egui needs a layout pass before text is placed.
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            SidebarView::new(&vms, Some(vm.id), &mut search, &statuses, &i18n)
+                .with_delete_confirmation(&mut confirm)
+                .with_delete_folder(consent, folder, folder_for)
+                .show(ui);
+        });
+    });
+    let output = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            SidebarView::new(&vms, Some(vm.id), &mut search, &statuses, &i18n)
+                .with_delete_confirmation(&mut confirm)
+                .with_delete_folder(consent, folder, folder_for)
+                .show(ui);
+        });
+    });
+    common::rendered_text(&output)
+}
+
+#[test]
+fn test_the_delete_dialog_names_the_folder_it_would_take() {
+    let vm = VmConfig::new_default("Debian", Arch::X86_64);
+    let folder = PathBuf::from(r"C:\Users\someone\FARO-VMs\Debian");
+    let mut consent = false;
+
+    let drawn = rendered_delete_dialog(&vm, Some(&folder), Some(vm.id), &mut consent);
+
+    assert!(
+        drawn.contains("Debian"),
+        "the path belongs in the text, got:\n{}",
+        drawn
+    );
+    assert!(
+        drawn.contains("FARO-VMs"),
+        "the whole path, not just the leaf, got:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_the_delete_dialog_offers_no_box_when_there_is_no_folder() {
+    // No folder of its own, or an ambiguous one: nothing to consent to.
+    let vm = VmConfig::new_default("hand-made", Arch::X86_64);
+    let i18n = I18n::new("en");
+    let mut consent = false;
+
+    let drawn = rendered_delete_dialog(&vm, None, Some(vm.id), &mut consent);
+
+    let label = i18n
+        .t("delete_take_folder")
+        .split("{path}")
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    assert!(!label.is_empty());
+    assert!(
+        !drawn.contains(&label),
+        "a box with nothing behind it must not be drawn, got:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_a_folder_worked_out_for_another_machine_is_not_offered() {
+    // The frame the dialog opens on a second machine: the caller has not
+    // reset the tick yet, and a stale consent must not reach delete_vm.
+    let vm = VmConfig::new_default("Debian", Arch::X86_64);
+    let other = Uuid::new_v4();
+    let folder = PathBuf::from(r"C:\Users\someone\FARO-VMs\SomethingElse");
+    let mut consent = true;
+
+    let drawn = rendered_delete_dialog(&vm, Some(&folder), Some(other), &mut consent);
+
+    assert!(
+        !drawn.contains("SomethingElse"),
+        "that folder belongs to another machine, got:\n{}",
+        drawn
+    );
 }
