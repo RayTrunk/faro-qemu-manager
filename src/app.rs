@@ -815,10 +815,8 @@ impl FaroQemApp {
             }
             ui.add_space(16.0);
             ui.label(
-                egui::RichText::new(
-                    "Select a virtual machine from the sidebar or create a new one.",
-                )
-                .color(ui.visuals().weak_text_color()),
+                egui::RichText::new(self.i18n.t("empty_state_hint"))
+                    .color(ui.visuals().weak_text_color()),
             );
             ui.add_space(20.0);
             let create_btn = egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
@@ -1127,16 +1125,16 @@ impl FaroQemApp {
                             ui.image((logo.id(), egui::vec2(64.0, 64.0)));
                             ui.add_space(6.0);
                         }
-                        ui.heading("FARO QEMU MANAGER");
+                        ui.heading(self.i18n.t("app_title"));
                         ui.label(
-                            egui::RichText::new("(C) R.Trunk 2026")
+                            egui::RichText::new(self.i18n.t("app_copyright"))
                                 .strong()
                                 .size(12.0)
                                 .color(ui.visuals().weak_text_color()),
                         );
                         ui.add_space(8.0);
-                        ui.label("Modern QEMU Virtual Machine Manager");
-                        ui.label("Swiss High-Modernist Desktop Interface");
+                        ui.label(self.i18n.t("app_tagline"));
+                        ui.label(self.i18n.t("app_subtitle"));
                         ui.add_space(12.0);
                         if ui.button(self.i18n.t("close")).clicked() {
                             self.about_open = false;

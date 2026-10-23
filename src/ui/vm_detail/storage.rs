@@ -25,11 +25,20 @@ impl<'a> VmDetailView<'a> {
                 ui.heading(self.i18n.t("disks"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // [+ Add Existing Disk]
-                    if ui.button(format!("{} {}", icons::ADD, self.i18n.t("add_disk"))).clicked() {
-                        let dialog = rfd::FileDialog::new()
-                            .add_filter("Virtual Disk Images", &["qcow2", "img", "raw", "vmdk", "vdi", "vhdx"]);
+                    if ui
+                        .button(format!("{} {}", icons::ADD, self.i18n.t("add_disk")))
+                        .clicked()
+                    {
+                        let dialog = rfd::FileDialog::new().add_filter(
+                            self.i18n.t("filter_disk"),
+                            &["qcow2", "img", "raw", "vmdk", "vdi", "vhdx"],
+                        );
                         if let Some(file) = dialog.pick_file() {
-                            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                            let ext = file
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
                             let format = match ext.as_str() {
                                 "qcow2" => DriveFormat::Qcow2,
                                 "vmdk" => DriveFormat::Vmdk,
@@ -45,10 +54,12 @@ impl<'a> VmDetailView<'a> {
                     }
 
                     // [✨ Create New Disk Image]
-                    let create_modal_btn = egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("create_disk")))
-                        .fill(COLOR_PRIMARY);
+                    let create_modal_btn =
+                        egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("create_disk")))
+                            .fill(COLOR_PRIMARY);
                     if ui.add(create_modal_btn).clicked() {
-                        let default_name = format!("{}.qcow2", self.vm.name.replace(' ', "_").to_lowercase());
+                        let default_name =
+                            format!("{}.qcow2", self.vm.name.replace(' ', "_").to_lowercase());
                         self.disk_modal.open_dialog(&default_name);
                     }
                 });
@@ -58,7 +69,7 @@ impl<'a> VmDetailView<'a> {
 
             if self.vm.drives.is_empty() {
                 ui.label(
-                    egui::RichText::new("No virtual hard disks attached. Click 'Add Disk' or 'Create Disk' to attach storage.")
+                    egui::RichText::new(self.i18n.t("disks_empty_hint"))
                         .size(12.0)
                         .color(ui.visuals().weak_text_color())
                         .italics(),
@@ -68,19 +79,37 @@ impl<'a> VmDetailView<'a> {
                 for (idx, drive) in self.vm.drives.iter_mut().enumerate() {
                     card_frame(ui.visuals()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(icons::DISK).size(16.0).color(COLOR_PRIMARY));
+                            ui.label(
+                                egui::RichText::new(icons::DISK)
+                                    .size(16.0)
+                                    .color(COLOR_PRIMARY),
+                            );
                             let file_name = drive
                                 .path
                                 .file_name()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("drive");
-                            ui.label(egui::RichText::new(format!("Drive #{}: {}", idx + 1, file_name)).strong());
+                            ui.label(
+                                egui::RichText::new(self.i18n.tf(
+                                    "drive_label",
+                                    &[("index", &(idx + 1).to_string()), ("name", file_name)],
+                                ))
+                                .strong(),
+                            );
 
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if danger_button(ui, format!("{} {}", icons::DELETE, self.i18n.t("remove"))).clicked() {
-                                    remove_idx = Some(idx);
-                                }
-                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if danger_button(
+                                        ui,
+                                        format!("{} {}", icons::DELETE, self.i18n.t("remove")),
+                                    )
+                                    .clicked()
+                                    {
+                                        remove_idx = Some(idx);
+                                    }
+                                },
+                            );
                         });
 
                         ui.add_space(2.0);
@@ -110,7 +139,11 @@ impl<'a> VmDetailView<'a> {
                                 .selected_text(drive.interface.as_str())
                                 .show_ui(ui, |ui| {
                                     for iface in DriveInterface::all() {
-                                        ui.selectable_value(&mut drive.interface, *iface, iface.as_str());
+                                        ui.selectable_value(
+                                            &mut drive.interface,
+                                            *iface,
+                                            iface.as_str(),
+                                        );
                                     }
                                 });
 
@@ -118,7 +151,10 @@ impl<'a> VmDetailView<'a> {
 
                             // Boot Index
                             let mut has_boot = drive.boot_index.is_some();
-                            if ui.checkbox(&mut has_boot, self.i18n.t("boot_index")).changed() {
+                            if ui
+                                .checkbox(&mut has_boot, self.i18n.t("boot_index"))
+                                .changed()
+                            {
                                 drive.boot_index = if has_boot { Some(idx as u32) } else { None };
                             }
                             if let Some(ref mut bidx) = drive.boot_index {
@@ -142,9 +178,12 @@ impl<'a> VmDetailView<'a> {
             ui.horizontal(|ui| {
                 ui.heading(self.i18n.t("cdroms"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(format!("{} {}", icons::ADD, self.i18n.t("add_cdrom"))).clicked() {
+                    if ui
+                        .button(format!("{} {}", icons::ADD, self.i18n.t("add_cdrom")))
+                        .clicked()
+                    {
                         let dialog = rfd::FileDialog::new()
-                            .add_filter("ISO Images", &["iso", "img"]);
+                            .add_filter(self.i18n.t("filter_iso"), &["iso", "img"]);
                         if let Some(file) = dialog.pick_file() {
                             self.vm.cdroms.push(file);
                         }
@@ -156,7 +195,7 @@ impl<'a> VmDetailView<'a> {
 
             if self.vm.cdroms.is_empty() {
                 ui.label(
-                    egui::RichText::new("No CD/DVD ISO image attached. Click 'Add CD/DVD ISO' to mount install media.")
+                    egui::RichText::new(self.i18n.t("cdroms_empty_hint"))
                         .size(12.0)
                         .color(ui.visuals().weak_text_color())
                         .italics(),
@@ -166,28 +205,53 @@ impl<'a> VmDetailView<'a> {
                 for (idx, cdrom) in self.vm.cdroms.iter_mut().enumerate() {
                     card_frame(ui.visuals()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(icons::DISK).size(16.0).color(COLOR_PRIMARY));
+                            ui.label(
+                                egui::RichText::new(icons::DISK)
+                                    .size(16.0)
+                                    .color(COLOR_PRIMARY),
+                            );
                             let file_name = cdrom
                                 .file_name()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("cdrom.iso");
-                            ui.label(egui::RichText::new(format!("CD/DVD #{}: {}", idx + 1, file_name)).strong());
+                            ui.label(
+                                egui::RichText::new(self.i18n.tf(
+                                    "cdrom_label",
+                                    &[("index", &(idx + 1).to_string()), ("name", file_name)],
+                                ))
+                                .strong(),
+                            );
 
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if danger_button(ui, format!("{} {}", icons::CLOSE, self.i18n.t("eject"))).clicked() {
-                                    remove_cdrom_idx = Some(idx);
-                                }
-                                if ui.button(format!("{} {}", icons::FOLDER, self.i18n.t("browse"))).clicked() {
-                                    let mut dialog = rfd::FileDialog::new()
-                                        .add_filter("ISO Images", &["iso", "img"]);
-                                    if let Some(parent) = cdrom.parent() {
-                                        dialog = dialog.set_directory(parent);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if danger_button(
+                                        ui,
+                                        format!("{} {}", icons::CLOSE, self.i18n.t("eject")),
+                                    )
+                                    .clicked()
+                                    {
+                                        remove_cdrom_idx = Some(idx);
                                     }
-                                    if let Some(new_iso) = dialog.pick_file() {
-                                        *cdrom = new_iso;
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            icons::FOLDER,
+                                            self.i18n.t("browse")
+                                        ))
+                                        .clicked()
+                                    {
+                                        let mut dialog = rfd::FileDialog::new()
+                                            .add_filter(self.i18n.t("filter_iso"), &["iso", "img"]);
+                                        if let Some(parent) = cdrom.parent() {
+                                            dialog = dialog.set_directory(parent);
+                                        }
+                                        if let Some(new_iso) = dialog.pick_file() {
+                                            *cdrom = new_iso;
+                                        }
                                     }
-                                }
-                            });
+                                },
+                            );
                         });
 
                         ui.add_space(2.0);
@@ -238,15 +302,22 @@ impl<'a> VmDetailView<'a> {
                                     .hint_text("C:\\VMs\\disk.qcow2")
                                     .desired_width(220.0),
                             );
-                            if ui.button(format!("{} {}", icons::FOLDER, self.i18n.t("browse"))).clicked() {
-                                let default_name = format!("{}.qcow2", self.vm.name.replace(' ', "_").to_lowercase());
+                            if ui
+                                .button(format!("{} {}", icons::FOLDER, self.i18n.t("browse")))
+                                .clicked()
+                            {
+                                let default_name = format!(
+                                    "{}.qcow2",
+                                    self.vm.name.replace(' ', "_").to_lowercase()
+                                );
                                 if let Some(save_path) = rfd::FileDialog::new()
                                     .set_file_name(&default_name)
-                                    .add_filter("QEMU QCOW2 Disk", &["qcow2"])
-                                    .add_filter("Raw Disk Image", &["raw", "img"])
+                                    .add_filter(self.i18n.t("format_qcow2"), &["qcow2"])
+                                    .add_filter(self.i18n.t("format_raw"), &["raw", "img"])
                                     .save_file()
                                 {
-                                    self.disk_modal.path_buf = save_path.to_string_lossy().to_string();
+                                    self.disk_modal.path_buf =
+                                        save_path.to_string_lossy().to_string();
                                 }
                             }
                         });
@@ -258,7 +329,11 @@ impl<'a> VmDetailView<'a> {
                             .selected_text(self.disk_modal.format.as_str())
                             .show_ui(ui, |ui| {
                                 for f in DriveFormat::all() {
-                                    ui.selectable_value(&mut self.disk_modal.format, *f, f.as_str());
+                                    ui.selectable_value(
+                                        &mut self.disk_modal.format,
+                                        *f,
+                                        f.as_str(),
+                                    );
                                 }
                             });
                         ui.end_row();
@@ -309,12 +384,14 @@ impl<'a> VmDetailView<'a> {
 
                 // Action buttons
                 ui.horizontal(|ui| {
-                    let create_btn = egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("create")))
-                        .fill(COLOR_PRIMARY);
+                    let create_btn =
+                        egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("create")))
+                            .fill(COLOR_PRIMARY);
                     if ui.add(create_btn).clicked() {
                         let trimmed = self.disk_modal.path_buf.trim();
                         if trimmed.is_empty() {
-                            self.disk_modal.status_msg = Some(Err("Target disk path cannot be empty.".to_string()));
+                            self.disk_modal.status_msg =
+                                Some(Err(self.i18n.t("disk_path_empty").to_string()));
                         } else {
                             let path = PathBuf::from(trimmed);
                             let qemu_img = self
@@ -337,7 +414,8 @@ impl<'a> VmDetailView<'a> {
                                                 interface: DriveInterface::VirtIO,
                                                 boot_index: None,
                                             });
-                                            self.disk_modal.status_msg = Some(Ok("Disk created successfully!".to_string()));
+                                            self.disk_modal.status_msg =
+                                                Some(Ok(self.i18n.t("disk_created").to_string()));
                                             close_modal = true;
                                         }
                                         Err(e) => {
@@ -346,9 +424,8 @@ impl<'a> VmDetailView<'a> {
                                     }
                                 }
                                 None => {
-                                    self.disk_modal.status_msg = Some(Err(
-                                        "qemu-img binary not found. Please configure QEMU directory in Settings.".to_string(),
-                                    ));
+                                    self.disk_modal.status_msg =
+                                        Some(Err(self.i18n.t("qemu_img_missing").to_string()));
                                 }
                             }
                         }

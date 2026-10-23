@@ -42,9 +42,9 @@ impl<'a> VmDetailView<'a> {
                                 }
                             });
                         let hint = match self.vm.network.backend.as_str() {
-                            "user" => "(SLIRP NAT user-mode network with Internet access)",
-                            "bridge" => "(Host bridged interface)",
-                            "none" => "(No network connectivity)",
+                            "user" => self.i18n.t("hint_net_user"),
+                            "bridge" => self.i18n.t("hint_net_bridge"),
+                            "none" => self.i18n.t("hint_net_none"),
                             _ => "",
                         };
                         ui.label(
@@ -83,9 +83,9 @@ impl<'a> VmDetailView<'a> {
                                 }
                             });
                         let hint = match self.vm.network.nic_model.as_str() {
-                            "virtio-net-pci" => "(High performance VirtIO virtual NIC)",
-                            "e1000" => "(Intel PRO/1000 Gigabit Ethernet - highly compatible)",
-                            "rtl8139" => "(Realtek 8139 Fast Ethernet)",
+                            "virtio-net-pci" => self.i18n.t("hint_nic_virtio"),
+                            "e1000" => self.i18n.t("hint_nic_e1000"),
+                            "rtl8139" => self.i18n.t("hint_nic_rtl8139"),
                             _ => "",
                         };
                         ui.label(
@@ -105,7 +105,14 @@ impl<'a> VmDetailView<'a> {
             ui.horizontal(|ui| {
                 ui.heading(self.i18n.t("port_forwards"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(format!("{} {}", icons::ADD, self.i18n.t("add_port_forward"))).clicked() {
+                    if ui
+                        .button(format!(
+                            "{} {}",
+                            icons::ADD,
+                            self.i18n.t("add_port_forward")
+                        ))
+                        .clicked()
+                    {
                         self.vm.network.port_forwards.push(PortForwardRule {
                             host_port: 2222,
                             guest_port: 22,
@@ -119,7 +126,7 @@ impl<'a> VmDetailView<'a> {
 
             if self.vm.network.port_forwards.is_empty() {
                 ui.label(
-                    egui::RichText::new("No port forwarding rules configured. Add rules to forward host ports into VM services (e.g. 2222 -> 22 for SSH, 8080 -> 80 for HTTP).")
+                    egui::RichText::new(self.i18n.t("forwards_empty_hint"))
                         .size(11.0)
                         .color(ui.visuals().weak_text_color())
                         .italics(),
@@ -151,7 +158,10 @@ impl<'a> VmDetailView<'a> {
                                     ui.selectable_value(&mut rule.proto, "udp".to_string(), "UDP");
                                 });
 
-                            if danger_button(ui, icons::DELETE).on_hover_text(self.i18n.t("delete")).clicked() {
+                            if danger_button(ui, icons::DELETE)
+                                .on_hover_text(self.i18n.t("delete"))
+                                .clicked()
+                            {
                                 del_idx = Some(idx);
                             }
                             ui.end_row();
@@ -171,7 +181,7 @@ impl<'a> VmDetailView<'a> {
             ui.heading(self.i18n.t("extra_args"));
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("Additional command-line flags passed directly to QEMU (e.g. -usb -device usb-tablet -audiodev dsound,id=snd0)")
+                egui::RichText::new(self.i18n.t("extra_args_hint"))
                     .size(11.0)
                     .color(ui.visuals().weak_text_color()),
             );

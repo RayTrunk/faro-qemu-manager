@@ -398,7 +398,7 @@ impl<'a> ConsoleView<'a> {
                     .add(egui::Button::new(
                         egui::RichText::new(clear_text).size(12.0),
                     ))
-                    .on_hover_text("Clear console buffer")
+                    .on_hover_text(self.i18n.t("console_clear_tip"))
                     .clicked()
                 {
                     self.logs.clear();
@@ -411,7 +411,7 @@ impl<'a> ConsoleView<'a> {
                     .add(egui::Button::new(
                         egui::RichText::new(copy_logs_label).size(12.0),
                     ))
-                    .on_hover_text("Copy all console logs to clipboard")
+                    .on_hover_text(self.i18n.t("console_copy_tip"))
                     .clicked()
                 {
                     let full_log = self.logs.all_text();
@@ -451,12 +451,12 @@ impl<'a> ConsoleView<'a> {
         // --- Collapsible CLI Command Preview ---
         if let Some(cmd) = self.cli_command {
             ui.add_space(4.0);
-            let header_title = format!("{} QEMU Command Line Preview", icons::CONSOLE);
+            let header_title = format!("{} {}", icons::CONSOLE, self.i18n.t("cli_preview_title"));
             egui::CollapsingHeader::new(egui::RichText::new(header_title).size(12.0).strong())
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let copy_btn_text = format!("{} Copy Command", icons::COPY);
+                        let copy_btn_text = format!("{} {}", icons::COPY, self.i18n.t("copy"));
                         if ui
                             .add(egui::Button::new(
                                 egui::RichText::new(copy_btn_text).size(11.0),
@@ -517,7 +517,7 @@ impl<'a> ConsoleView<'a> {
                     ui.add_space(30.0);
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new("[FARO QEMU MANAGER] Console output buffer is empty.")
+                            egui::RichText::new(self.i18n.t("console_empty"))
                                 .monospace()
                                 .size(12.0)
                                 .color(Color32::from_rgb(120, 125, 135)),
@@ -525,21 +525,17 @@ impl<'a> ConsoleView<'a> {
                         ui.add_space(4.0);
                         if self.is_running {
                             ui.label(
-                                egui::RichText::new(
-                                    "VM is actively running. Awaiting stdout / stderr messages...",
-                                )
-                                .monospace()
-                                .size(11.0)
-                                .color(COLOR_RUNNING),
+                                egui::RichText::new(self.i18n.t("console_awaiting"))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(COLOR_RUNNING),
                             );
                         } else {
                             ui.label(
-                                egui::RichText::new(
-                                    "Virtual machine is stopped. Click 'Launch VM' to initialize execution.",
-                                )
-                                .monospace()
-                                .size(11.0)
-                                .color(Color32::from_rgb(90, 95, 105)),
+                                egui::RichText::new(self.i18n.t("console_stopped_hint"))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(Color32::from_rgb(90, 95, 105)),
                             );
                         }
                     });

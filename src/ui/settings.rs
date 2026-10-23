@@ -14,7 +14,6 @@ pub struct SettingsDialog<'a> {
     pub open: &'a mut bool,
     pub settings: &'a mut AppSettings,
     pub i18n: &'a mut I18n,
-    pub logo: Option<&'a egui::TextureHandle>,
 }
 
 impl<'a> SettingsDialog<'a> {
@@ -24,14 +23,7 @@ impl<'a> SettingsDialog<'a> {
             open,
             settings,
             i18n,
-            logo: None,
         }
-    }
-
-    /// Attach application logo texture
-    pub fn with_logo(mut self, logo: Option<&'a egui::TextureHandle>) -> Self {
-        self.logo = logo;
-        self
     }
 
     /// Renders the settings dialog window.
@@ -233,7 +225,7 @@ impl<'a> SettingsDialog<'a> {
 
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut dir_str)
-                        .hint_text("Auto-detected (System PATH & defaults)")
+                        .hint_text(self.i18n.t("qemu_dir_auto"))
                         .desired_width(desired_width),
                 );
 
@@ -283,19 +275,20 @@ impl<'a> SettingsDialog<'a> {
                 Some(ref bin_path) => {
                     ui.label(egui::RichText::new(icons::CHECK).color(COLOR_RUNNING));
                     ui.label(
-                        egui::RichText::new(format!("QEMU binary found: {}", bin_path.display()))
-                            .size(12.0)
-                            .color(COLOR_RUNNING),
+                        egui::RichText::new(
+                            self.i18n
+                                .tf("qemu_found", &[("path", &bin_path.display().to_string())]),
+                        )
+                        .size(12.0)
+                        .color(COLOR_RUNNING),
                     );
                 }
                 None => {
                     ui.label(egui::RichText::new(icons::WARNING).color(COLOR_WARNING));
                     ui.label(
-                        egui::RichText::new(
-                            "No QEMU binary found in selected directory or system PATH",
-                        )
-                        .size(12.0)
-                        .color(COLOR_WARNING),
+                        egui::RichText::new(self.i18n.t("qemu_not_found"))
+                            .size(12.0)
+                            .color(COLOR_WARNING),
                     );
                 }
             });

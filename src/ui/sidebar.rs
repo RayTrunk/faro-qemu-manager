@@ -397,7 +397,7 @@ impl<'a> SidebarView<'a> {
                     .iter()
                     .find(|v| v.id == del_id)
                     .map(|v| v.name.clone())
-                    .unwrap_or_else(|| "Virtual Machine".to_string());
+                    .unwrap_or_else(|| self.i18n.t("vm_fallback_name").to_string());
 
                 let mut close_modal = false;
                 egui::Window::new(format!("{} {}", icons::WARNING, self.i18n.t("delete")))

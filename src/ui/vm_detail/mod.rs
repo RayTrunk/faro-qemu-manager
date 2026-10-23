@@ -25,10 +25,6 @@ use crate::ui::theme::{
     COLOR_WARNING, ROUNDING_BUTTON,
 };
 
-/// Graphics adapters worth offering for `arch`.
-///
-/// `-vga` and its named types are an x86 convenience. On every other
-/// architecture QEMU has no VGA adapter and answers `Virtio VGA not
 /// Actions emitted by the VM detail view toolbar and tabs
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmDetailAction {
@@ -310,9 +306,10 @@ impl<'a> VmDetailView<'a> {
                     // Running / Stopped Status Badge
                     if self.is_running {
                         let status_text = if let Some(pid) = self.pid {
-                            format!("RUNNING · PID {}", pid)
+                            self.i18n
+                                .tf("badge_running_pid", &[("pid", &pid.to_string())])
                         } else {
-                            "RUNNING".to_string()
+                            self.i18n.t("badge_running").to_string()
                         };
                         status_badge(ui, &status_text, COLOR_RUNNING);
                     } else {
@@ -384,7 +381,7 @@ impl<'a> VmDetailView<'a> {
                 ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("ARCHITECTURE")
+                            egui::RichText::new(self.i18n.t("card_architecture"))
                                 .size(10.0)
                                 .color(ui.visuals().weak_text_color())
                                 .strong(),
@@ -404,7 +401,7 @@ impl<'a> VmDetailView<'a> {
                 ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("PROCESSING")
+                            egui::RichText::new(self.i18n.t("card_processing"))
                                 .size(10.0)
                                 .color(ui.visuals().weak_text_color())
                                 .strong(),
@@ -424,7 +421,7 @@ impl<'a> VmDetailView<'a> {
                 ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("MEMORY")
+                            egui::RichText::new(self.i18n.t("card_memory"))
                                 .size(10.0)
                                 .color(ui.visuals().weak_text_color())
                                 .strong(),
@@ -444,7 +441,7 @@ impl<'a> VmDetailView<'a> {
                 ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("ACCELERATOR")
+                            egui::RichText::new(self.i18n.t("card_accelerator"))
                                 .size(10.0)
                                 .color(ui.visuals().weak_text_color())
                                 .strong(),
@@ -533,61 +530,68 @@ impl<'a> VmDetailView<'a> {
             view.show(ui);
         } else {
             card_frame(ui.visuals()).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(icons::CONSOLE).size(24.0).color(COLOR_PRIMARY));
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("QEMU Live Monitor & Console Output").strong());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(icons::CONSOLE)
+                            .size(24.0)
+                            .color(COLOR_PRIMARY),
+                    );
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(self.i18n.t("console_title")).strong());
+                        if self.is_running {
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("console_running_hint"))
+                                    .color(COLOR_RUNNING)
+                                    .size(12.0),
+                            );
+                        } else {
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("console_stopped_hint"))
+                                    .color(ui.visuals().weak_text_color())
+                                    .size(12.0),
+                            );
+                        }
+                    });
+                });
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                let frame = egui::Frame::none()
+                    .fill(ui.visuals().extreme_bg_color)
+                    .stroke(Stroke::new(
+                        1.0,
+                        ui.visuals().widgets.noninteractive.bg_stroke.color,
+                    ))
+                    .rounding(egui::Rounding::same(ROUNDING_BUTTON))
+                    .inner_margin(egui::Margin::same(10.0));
+
+                frame.show(ui, |ui| {
+                    ui.set_min_height(140.0);
                     if self.is_running {
                         ui.label(
-                            egui::RichText::new("VM is actively running. Real-time stdout and stderr logs are captured.")
-                                .color(COLOR_RUNNING)
-                                .size(12.0),
+                            egui::RichText::new(
+                                self.i18n
+                                    .tf("console_placeholder_running", &[("name", &self.vm.name)]),
+                            )
+                            .monospace()
+                            .size(12.0)
+                            .color(COLOR_RUNNING),
                         );
                     } else {
                         ui.label(
-                            egui::RichText::new("VM is stopped. Launch the VM to view real-time QEMU output streams.")
-                                .color(ui.visuals().weak_text_color())
-                                .size(12.0),
+                            egui::RichText::new(
+                                self.i18n
+                                    .tf("console_placeholder_stopped", &[("name", &self.vm.name)]),
+                            )
+                            .monospace()
+                            .size(12.0)
+                            .color(ui.visuals().weak_text_color()),
                         );
                     }
                 });
             });
-
-            ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(8.0);
-
-            let frame = egui::Frame::none()
-                .fill(ui.visuals().extreme_bg_color)
-                .stroke(Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                .rounding(egui::Rounding::same(ROUNDING_BUTTON))
-                .inner_margin(egui::Margin::same(10.0));
-
-            frame.show(ui, |ui| {
-                ui.set_min_height(140.0);
-                if self.is_running {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "[FARO QEMU MANAGER] Virtual Machine '{}' is running.\nProcess supervisor is streaming output in background...",
-                            self.vm.name
-                        ))
-                        .monospace()
-                        .size(12.0)
-                        .color(COLOR_RUNNING),
-                    );
-                } else {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "[FARO QEMU MANAGER] Virtual Machine '{}' is stopped.\nClick 'Launch VM' to initialize hardware emulation.",
-                            self.vm.name
-                        ))
-                        .monospace()
-                        .size(12.0)
-                        .color(ui.visuals().weak_text_color()),
-                    );
-                }
-            });
-        });
         }
     }
 }

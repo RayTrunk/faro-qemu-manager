@@ -172,6 +172,36 @@ pub fn catalogue_keys(lang: &str) -> std::collections::BTreeSet<String> {
     map.into_keys().collect()
 }
 
+/// Every Rust source file under `dir`, concatenated.
+///
+/// Used to ask questions about the whole interface at once — whether a key is
+/// referenced anywhere, whether a hardcoded string survived — which no single
+/// file can answer. `dir` is a subtree so that part 4 can ask the same
+/// question about one module.
+pub fn concat_sources(dir: &str) -> String {
+    fn walk(dir: &Path, out: &mut String) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    out.push_str(&text);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+
+    let mut out = String::new();
+    walk(Path::new(dir), &mut out);
+    assert!(!out.is_empty(), "no Rust sources under {}", dir);
+    out
+}
+
 /// An app whose VM folders go into `vm_dir`.
 ///
 /// Used from three test files, which is why it lives here rather than being

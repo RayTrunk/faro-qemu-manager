@@ -103,17 +103,17 @@ impl<'a> VmDetailView<'a> {
                         let hint = match self.vm.accel {
                             Accelerator::Auto => {
                                 if cfg!(target_os = "windows") {
-                                    "(Auto: WHPX on Windows)"
+                                    self.i18n.t("hint_accel_auto_whpx")
                                 } else if cfg!(target_os = "linux") {
-                                    "(Auto: KVM on Linux)"
+                                    self.i18n.t("hint_accel_auto_kvm")
                                 } else {
-                                    "(Auto: TCG Emulation)"
+                                    self.i18n.t("hint_accel_auto_tcg")
                                 }
                             }
-                            Accelerator::WHPX => "(Windows Hypervisor Platform)",
-                            Accelerator::HAXM => "(Intel Hardware Acceleration)",
-                            Accelerator::KVM => "(Kernel-based Virtual Machine)",
-                            Accelerator::TCG => "(Tiny Code Generator software emulation)",
+                            Accelerator::WHPX => self.i18n.t("hint_accel_whpx"),
+                            Accelerator::HAXM => self.i18n.t("hint_accel_haxm"),
+                            Accelerator::KVM => self.i18n.t("hint_accel_kvm"),
+                            Accelerator::TCG => self.i18n.t("hint_accel_tcg"),
                         };
                         ui.label(
                             egui::RichText::new(hint)
@@ -247,7 +247,10 @@ impl<'a> VmDetailView<'a> {
                                         .clicked()
                                     {
                                         if let Some(file) = rfd::FileDialog::new()
-                                            .add_filter("Firmware Images", &["fd", "bin", "rom"])
+                                            .add_filter(
+                                                self.i18n.t("filter_firmware"),
+                                                &["fd", "bin", "rom"],
+                                            )
                                             .pick_file()
                                         {
                                             *rom = Some(file);

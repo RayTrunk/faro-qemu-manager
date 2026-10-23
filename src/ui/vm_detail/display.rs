@@ -5,10 +5,6 @@
 
 use crate::ui::theme::card_frame;
 
-/// Graphics adapters worth offering for `arch`.
-///
-/// `-vga` and its named types are an x86 convenience. On every other
-/// architecture QEMU has no VGA adapter and answers `Virtio VGA not
 use super::offers::*;
 use super::VmDetailView;
 
@@ -39,11 +35,11 @@ impl<'a> VmDetailView<'a> {
                                 }
                             });
                         let hint = match self.vm.display.vga_type.as_str() {
-                            "virtio-vga" => "(VirtIO 2D/3D hardware-accelerated graphics)",
-                            "std" => "(Standard VESA 2.0 compatible graphic card)",
-                            "qxl" => "(SPICE QXL para-virtualized graphics card)",
-                            "cirrus" => "(Legacy Cirrus CL-GD5446 VGA)",
-                            "none" => "(Headless / No graphic card)",
+                            "virtio-vga" => self.i18n.t("hint_vga_virtio"),
+                            "std" => self.i18n.t("hint_vga_std"),
+                            "qxl" => self.i18n.t("hint_vga_qxl"),
+                            "cirrus" => self.i18n.t("hint_vga_cirrus"),
+                            "none" => self.i18n.t("hint_vga_none"),
                             _ => "",
                         };
                         ui.label(
@@ -70,10 +66,10 @@ impl<'a> VmDetailView<'a> {
                                 }
                             });
                         let hint = match self.vm.display.display_backend.as_str() {
-                            "default" => "(Default native graphical window)",
-                            "gtk" => "(GTK graphical user interface)",
-                            "sdl" => "(Simple DirectMedia Layer window)",
-                            "none" => "(Headless mode without window)",
+                            "default" => self.i18n.t("hint_display_default"),
+                            "gtk" => self.i18n.t("hint_display_gtk"),
+                            "sdl" => self.i18n.t("hint_display_sdl"),
+                            "none" => self.i18n.t("hint_display_none"),
                             _ => "",
                         };
                         ui.label(
@@ -88,7 +84,7 @@ impl<'a> VmDetailView<'a> {
                     ui.label(egui::RichText::new(self.i18n.t("fullscreen")).strong());
                     ui.checkbox(
                         &mut self.vm.display.fullscreen,
-                        "Start VM window in fullscreen mode",
+                        self.i18n.t("fullscreen_hint"),
                     );
                     ui.end_row();
                 });

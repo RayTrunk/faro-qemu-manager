@@ -244,7 +244,7 @@ impl<'a> WizardDialog<'a> {
                     );
                     if ui.button(&browse).clicked() {
                         if let Some(file) = rfd::FileDialog::new()
-                            .add_filter("ISO Images", &["iso", "img"])
+                            .add_filter(self.i18n.t("filter_iso"), &["iso", "img"])
                             .pick_file()
                         {
                             state.iso = file.to_string_lossy().to_string();
