@@ -6,8 +6,11 @@ use std::sync::mpsc;
 use tempfile::tempdir;
 
 use faro_qem::app::FaroQemApp;
-use faro_qem::config::{load_settings, load_vms, Accelerator, Arch};
-use faro_qem::qemu::{spawn_qemu, QemuEvent};
+use faro_qem::config::{
+    load_settings, load_vms, Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, Firmware,
+    VmConfig,
+};
+use faro_qem::qemu::{nvram_path_for, spawn_qemu, QemuEvent};
 use faro_qem::ui::console::LogLevel;
 use faro_qem::ui::sidebar::{SidebarAction, VmStatus};
 use faro_qem::ui::vm_detail::{DetailTab, VmDetailAction};
@@ -343,4 +346,222 @@ fn test_faro_qem_app_settings_dialog_save_and_reload() {
     assert_eq!(fresh_app.settings.theme, "light");
     assert_eq!(fresh_app.settings.language, "de");
     assert_eq!(fresh_app.settings.default_arch, Arch::Aarch64);
+}
+
+// --------------------------------------------------------------------------
+// Firmware: a UEFI machine the user ticked must be able to start
+// --------------------------------------------------------------------------
+
+/// A directory shaped like a portable QEMU install, firmware included.
+///
+/// The two file names are the ones `find_uefi_firmware` looks for; the
+/// contents do not matter here, only that the pair is found and copied.
+fn portable_qemu_dir(root: &std::path::Path) -> std::path::PathBuf {
+    let share = root.join("share");
+    std::fs::create_dir_all(&share).unwrap();
+    std::fs::write(share.join("edk2-x86_64-code.fd"), b"CODE").unwrap();
+    std::fs::write(share.join("edk2-i386-vars.fd"), b"VARS").unwrap();
+    root.to_path_buf()
+}
+
+fn app_with_qemu_dir(dir: &std::path::Path) -> FaroQemApp {
+    let mut app = FaroQemApp::with_paths(dir.join("settings.json"), dir.join("vms.json"), None);
+    app.settings.qemu_dir = Some(portable_qemu_dir(&dir.join("qemu")));
+    app.refresh_capabilities();
+    app
+}
+
+#[test]
+fn test_firmware_is_found_in_the_configured_qemu_directory() {
+    let dir = tempdir().unwrap();
+    let app = app_with_qemu_dir(dir.path());
+    let found = app
+        .uefi_firmware
+        .as_ref()
+        .expect("a portable QEMU outside PATH still has its firmware beside it");
+    // Without this the test would pass on the firmware of the system QEMU,
+    // which is the very fallback that made a UEFI machine boot as BIOS.
+    assert!(
+        found.code.starts_with(dir.path()),
+        "the configured directory must win, got: {}",
+        found.code.display()
+    );
+}
+
+#[test]
+fn test_starting_a_uefi_vm_creates_the_variable_store_it_needs() {
+    let dir = tempdir().unwrap();
+    let app = app_with_qemu_dir(dir.path());
+
+    let nvram = dir.path().join("win11").join("nvram.fd");
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.firmware = Firmware::Uefi {
+        nvram: nvram.clone(),
+    };
+
+    app.ensure_nvram(&vm).expect("the store is ours to create");
+    assert!(
+        nvram.is_file(),
+        "without this file QEMU answers: could not open {}: file not found",
+        nvram.display()
+    );
+    assert_eq!(std::fs::read(&nvram).unwrap(), b"VARS");
+
+    // A second start must not wipe the boot entries the guest wrote.
+    std::fs::write(&nvram, b"GUEST BOOT ENTRIES").unwrap();
+    app.ensure_nvram(&vm).unwrap();
+    assert_eq!(std::fs::read(&nvram).unwrap(), b"GUEST BOOT ENTRIES");
+}
+
+#[test]
+fn test_a_uefi_vm_is_refused_when_no_firmware_was_found() {
+    let dir = tempdir().unwrap();
+    let mut app = FaroQemApp::with_paths(
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+        None,
+    );
+    // What a machine without any edk2 files looks like. It cannot be staged
+    // through the settings: with no binary in the configured directory the
+    // search falls back to the system QEMU, and finds its firmware.
+    app.uefi_firmware = None;
+
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.firmware = Firmware::Uefi {
+        nvram: dir.path().join("nvram.fd"),
+    };
+
+    let err = app
+        .ensure_nvram(&vm)
+        .expect_err("a UEFI machine with no firmware must not quietly boot as BIOS");
+    assert!(
+        err.to_lowercase().contains("uefi"),
+        "the message must name what is missing, got: {}",
+        err
+    );
+}
+
+// Important 6
+#[test]
+fn test_duplicating_a_uefi_vm_gives_the_copy_its_own_variable_store() {
+    let dir = tempdir().unwrap();
+    let app_dir = dir.path();
+    let mut app = app_with_qemu_dir(app_dir);
+
+    let disk = app_dir.join("vm").join("disk.qcow2");
+    std::fs::create_dir_all(disk.parent().unwrap()).unwrap();
+    std::fs::write(&disk, b"DISK").unwrap();
+
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.drives.push(DriveConfig {
+        path: disk,
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::Sata,
+        boot_index: None,
+    });
+    vm.firmware = Firmware::Uefi {
+        nvram: nvram_path_for(&vm),
+    };
+    let original_nvram = match &vm.firmware {
+        Firmware::Uefi { nvram } => nvram.clone(),
+        _ => unreachable!(),
+    };
+    std::fs::write(&original_nvram, b"ORIGINAL BOOT ENTRIES").unwrap();
+
+    let original_id = vm.id;
+    app.vms.push(vm);
+    app.handle_sidebar_action(SidebarAction::DuplicateVm(original_id), None);
+
+    let copy = app
+        .vms
+        .iter()
+        .find(|v| v.id != original_id && v.name.contains("Windows 11"))
+        .expect("the copy is in the list");
+    let copy_nvram = match &copy.firmware {
+        Firmware::Uefi { nvram } => nvram.clone(),
+        other => panic!("the copy must stay a UEFI machine, got {:?}", other),
+    };
+
+    assert_ne!(
+        copy_nvram, original_nvram,
+        "one store for two machines means they overwrite each other's boot entries"
+    );
+    assert_eq!(
+        std::fs::read(&copy_nvram).unwrap(),
+        b"ORIGINAL BOOT ENTRIES",
+        "the copy of an installed machine keeps its boot entries"
+    );
+    assert_eq!(
+        std::fs::read(&original_nvram).unwrap(),
+        b"ORIGINAL BOOT ENTRIES",
+        "and the original is untouched"
+    );
+}
+
+/// The whole UEFI path, through the app rather than through a builder.
+///
+/// Every other firmware test checks one piece: that the store is created,
+/// that the arguments are refused without firmware, that the probe accepts a
+/// pflash pair. None of them answers the question the user asks — does the
+/// machine I ticked UEFI for actually start — and for the whole of this
+/// branch the answer was no while every piece passed.
+#[test]
+fn test_a_uefi_machine_made_the_way_the_interface_makes_one_actually_starts() {
+    if faro_qem::qemu::find_qemu_binary(None, Arch::X86_64).is_none() {
+        eprintln!("skipped: no qemu-system-x86_64 on this machine");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let mut app = FaroQemApp::with_paths(
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+        None,
+    );
+    if app.uefi_firmware.is_none() {
+        eprintln!("skipped: no edk2 firmware on this machine");
+        return;
+    }
+
+    let disk = dir.path().join("win11").join("disk.qcow2");
+    std::fs::create_dir_all(disk.parent().unwrap()).unwrap();
+    let img = faro_qem::qemu::find_qemu_img(None).expect("qemu-img sits beside qemu");
+    faro_qem::qemu::create_disk_image(&img, &disk, DriveFormat::Qcow2, 1).unwrap();
+
+    // Exactly what the interface produces: SATA so the installer sees the
+    // disk, and the firmware switch set to UEFI.
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.memory_mb = 256;
+    vm.drives.push(DriveConfig {
+        path: disk,
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::Sata,
+        boot_index: Some(0),
+    });
+    vm.firmware = Firmware::Uefi {
+        nvram: nvram_path_for(&vm),
+    };
+    // No window, so the suite stays quiet.
+    vm.display.vga_type = "none".to_string();
+    vm.display.display_backend = "none".to_string();
+
+    let id = vm.id;
+    app.vms.push(vm);
+    app.launch_vm(id, None).expect("the machine starts");
+
+    // Give QEMU a moment to reject the arguments if it is going to.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let status = app.status_map.get(&id).cloned();
+    let said = app
+        .console_logs
+        .get(&id)
+        .map(|b| b.all_text())
+        .unwrap_or_default();
+    let _ = app.stop_vm(id);
+
+    assert!(
+        matches!(status, Some(VmStatus::Running { .. })),
+        "status was {:?}, QEMU said:\n{}",
+        status,
+        said
+    );
 }

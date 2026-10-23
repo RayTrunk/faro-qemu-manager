@@ -87,5 +87,15 @@
   "config_corrupt_not_quarantined": "{file} konnte nicht gelesen und auch nicht beiseitegelegt werden ({detail}). Die Datei blieb unberührt.",
   "config_save_failed": "{file} konnte nicht gespeichert werden: {detail}",
   "config_unreadable_left_alone": "{file} konnte nicht gelesen werden ({detail}). Die Datei wurde unangetastet gelassen, und in dieser Sitzung wird nichts darüber geschrieben. Beende, was sie belegt, und starte neu.",
-  "config_write_blocked": "{file} wurde nicht gespeichert: dort liegt noch eine Konfiguration, die nicht gelesen werden konnte, und sie zu überschreiben würde sie vernichten."
+  "config_write_blocked": "{file} wurde nicht gespeichert: dort liegt noch eine Konfiguration, die nicht gelesen werden konnte, und sie zu überschreiben würde sie vernichten.",
+  "firmware": "Firmware",
+  "firmware_bios": "BIOS (herkömmlich)",
+  "firmware_uefi": "UEFI",
+  "firmware_rom": "BIOS-ROM (optional)",
+  "firmware_nvram": "Variablenspeicher (je VM)",
+  "firmware_missing": "Neben QEMU wurde keine UEFI-Firmware gefunden. Diese VM kann erst starten, wenn sie vorliegt.",
+  "firmware_uefi_hint": "Von Windows 11 verlangt. Jede VM behält ihren eigenen Variablenspeicher, damit ihre Booteinträge erhalten bleiben.",
+  "option_unverified": "ungeprüft — QEMU wurde nicht gefragt",
+  "option_substituted": "nicht verfügbar — beim Start wird eine andere Beschleunigung verwendet",
+  "forwards_backend_only": "Portweiterleitung funktioniert nur mit Benutzermodus-Netzwerk. Diese Regeln bleiben gespeichert, greifen aber nicht."
 }

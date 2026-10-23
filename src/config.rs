@@ -270,6 +270,48 @@ impl Default for DisplayConfig {
     }
 }
 
+/// How a virtual machine finds its firmware.
+///
+/// UEFI is not a file but a pair: a read-only code image plus a writable
+/// variable store. The variable store is where the guest records its boot
+/// entries, so it belongs to the VM and nowhere else — two VMs sharing one
+/// would overwrite each other's boot configuration.
+///
+/// There is deliberately no Secure Boot case. The variable template QEMU ships
+/// carries no enrolled keys, and enforcing the signature checks would also need
+/// `smm=on` plus the matching pflash property; offering "Secure Boot" on top of
+/// stock variables would name something the firmware does not actually do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum Firmware {
+    /// Legacy BIOS. `rom` overrides the built-in one when set.
+    Bios {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rom: Option<PathBuf>,
+    },
+    /// UEFI, with this VM's own variable store.
+    Uefi { nvram: PathBuf },
+}
+
+impl Default for Firmware {
+    fn default() -> Self {
+        Firmware::Bios { rom: None }
+    }
+}
+
+/// Carry a pre-firmware configuration forward.
+///
+/// The old `bios_uefi` field was a single path with no indication of what kind
+/// of firmware it was. It was passed to `-bios`, which is the legacy BIOS
+/// option, so that is what it meant — whatever the field name suggested.
+pub fn migrate_firmware(vm: &mut VmConfig) {
+    if let Some(rom) = vm.bios_uefi.take() {
+        if vm.firmware == Firmware::default() {
+            vm.firmware = Firmware::Bios { rom: Some(rom) };
+        }
+    }
+}
+
 /// Complete configuration profile for a Virtual Machine
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmConfig {
@@ -284,7 +326,12 @@ pub struct VmConfig {
     pub memory_mb: u32,
     #[serde(default)]
     pub accel: Accelerator,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Firmware for this VM.
+    #[serde(default)]
+    pub firmware: Firmware,
+    /// Pre-firmware field, read on load and then folded into `firmware` by
+    /// [`migrate_firmware`]. Never written back out.
+    #[serde(default, skip_serializing)]
     pub bios_uefi: Option<PathBuf>,
     #[serde(default)]
     pub drives: Vec<DriveConfig>,
@@ -310,6 +357,7 @@ impl VmConfig {
             cpu_cores: 2,
             memory_mb: 2048,
             accel: Accelerator::Auto,
+            firmware: Firmware::default(),
             bios_uefi: None,
             drives: Vec::new(),
             cdroms: Vec::new(),
@@ -456,9 +504,14 @@ pub fn recovery_for(why: &ConfigLoadError) -> ConfigRecovery {
 /// Load the list of VMs, reporting why it could not be loaded.
 pub fn try_load_vms(path: &Path) -> Result<Vec<VmConfig>, ConfigLoadError> {
     let content = read_config_text(path)?;
-    serde_json::from_str(&content).map_err(|e| ConfigLoadError::Corrupt {
-        detail: e.to_string(),
-    })
+    let mut vms: Vec<VmConfig> =
+        serde_json::from_str(&content).map_err(|e| ConfigLoadError::Corrupt {
+            detail: e.to_string(),
+        })?;
+    for vm in &mut vms {
+        migrate_firmware(vm);
+    }
+    Ok(vms)
 }
 
 /// Load application settings, reporting why they could not be loaded.

@@ -1,7 +1,7 @@
 use faro_qem::config::{
-    load_settings, load_vms, save_settings, save_vms, Accelerator, AppSettings, Arch,
-    DisplayConfig, DriveConfig, DriveFormat, DriveInterface, NetworkConfig, PortForwardRule,
-    VmConfig,
+    load_settings, load_vms, save_settings, save_vms, try_load_vms, Accelerator, AppSettings, Arch,
+    DisplayConfig, DriveConfig, DriveFormat, DriveInterface, Firmware, NetworkConfig,
+    PortForwardRule, VmConfig,
 };
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -167,4 +167,56 @@ fn test_arch_and_accelerator_variants() {
         let parsed: Accelerator = serde_json::from_str(&json).unwrap();
         assert_eq!(*accel, parsed);
     }
+}
+
+// --------------------------------------------------------------------------
+// Part 2: firmware as its own concept
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_old_bios_uefi_field_still_loads() {
+    let json = r#"[{"id":"550e8400-e29b-41d4-a716-446655440000","name":"Old","arch":"x86_64",
+                    "cpu_cores":2,"memory_mb":2048,"bios_uefi":"/fw/OVMF.fd"}]"#;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vms.json");
+    std::fs::write(&path, json).unwrap();
+
+    let vms = try_load_vms(&path).expect("an old file still loads");
+    assert_eq!(
+        vms[0].firmware,
+        Firmware::Bios {
+            rom: Some(PathBuf::from("/fw/OVMF.fd"))
+        },
+        "an old bios_uefi path means BIOS with that ROM"
+    );
+}
+
+#[test]
+fn test_firmware_defaults_to_plain_bios() {
+    let vm = VmConfig::new_default("fresh", Arch::X86_64);
+    assert_eq!(vm.firmware, Firmware::Bios { rom: None });
+}
+
+#[test]
+fn test_firmware_round_trips() {
+    let fw = Firmware::Uefi {
+        nvram: PathBuf::from("vm/nvram.fd"),
+    };
+    let json = serde_json::to_string(&fw).unwrap();
+    assert_eq!(serde_json::from_str::<Firmware>(&json).unwrap(), fw);
+}
+
+#[test]
+fn test_a_uefi_vm_survives_a_save_and_load_round_trip() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vms.json");
+
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.firmware = Firmware::Uefi {
+        nvram: PathBuf::from("win11/nvram.fd"),
+    };
+    save_vms(&path, &[vm.clone()]).unwrap();
+
+    let loaded = try_load_vms(&path).unwrap();
+    assert_eq!(loaded[0].firmware, vm.firmware);
 }

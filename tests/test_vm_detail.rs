@@ -6,10 +6,17 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use faro_qem::config::{
-    Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, PortForwardRule, VmConfig,
+    Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, Firmware, PortForwardRule,
+    VmConfig,
 };
 use faro_qem::i18n::I18n;
-use faro_qem::ui::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
+use faro_qem::qemu::QemuCapabilities;
+use faro_qem::ui::{
+    offered_accelerators, offered_machine_types, offered_netdev_backends, CreateDiskState,
+    DetailTab, VmDetailAction, VmDetailView,
+};
+
+mod common;
 
 #[test]
 fn test_vm_detail_action_variants_and_helpers() {
@@ -76,7 +83,9 @@ fn test_vm_detail_system_tab_rendering() {
     vm.cpu_cores = 4;
     vm.memory_mb = 4096;
     vm.accel = Accelerator::WHPX;
-    vm.bios_uefi = Some(PathBuf::from(r"C:\Firmware\OVMF.fd"));
+    vm.firmware = Firmware::Bios {
+        rom: Some(PathBuf::from(r"C:\Firmware\OVMF.fd")),
+    };
 
     let mut active_tab = DetailTab::System;
     let mut disk_modal = CreateDiskState::default();
@@ -360,4 +369,278 @@ fn test_vm_detail_i18n_locales() {
             });
         });
     }
+}
+
+// --------------------------------------------------------------------------
+// Part 2: only offer what the installed QEMU actually has
+// --------------------------------------------------------------------------
+//
+// These assert on the offered lists directly, not on what a frame drew. A
+// closed ComboBox paints only its selected value, so "bridge is not on screen"
+// would hold even if bridge were on offer — a test without teeth.
+
+#[test]
+fn test_bridge_is_dropped_when_qemu_lacks_it() {
+    let without = QemuCapabilities {
+        netdev_backends: vec!["user".into(), "tap".into()],
+        ..Default::default()
+    };
+    let offered = offered_netdev_backends(Some(&without));
+    assert!(!offered.contains(&"bridge"), "offered: {:?}", offered);
+    assert!(offered.contains(&"user"));
+    assert!(
+        offered.contains(&"none"),
+        "none is ours, not QEMU's, and always available"
+    );
+}
+
+#[test]
+fn test_bridge_is_offered_when_qemu_has_it() {
+    let with = QemuCapabilities {
+        netdev_backends: vec!["user".into(), "tap".into(), "bridge".into()],
+        ..Default::default()
+    };
+    assert!(offered_netdev_backends(Some(&with)).contains(&"bridge"));
+}
+
+#[test]
+fn test_without_a_probe_capability_dependent_backends_stay_on_offer() {
+    let offered = offered_netdev_backends(None);
+    for expected in ["user", "bridge", "none"] {
+        assert!(
+            offered.contains(&expected),
+            "not knowing must not look like unavailable: {:?}",
+            offered
+        );
+    }
+}
+
+#[test]
+fn test_tap_is_never_offered_because_it_cannot_work_yet() {
+    let with_tap = QemuCapabilities {
+        netdev_backends: vec!["user".into(), "tap".into()],
+        ..Default::default()
+    };
+    for caps in [None, Some(&with_tap)] {
+        assert!(
+            !offered_netdev_backends(caps).contains(&"tap"),
+            "tap answers \"no interface name\"; the configuration has no field for one"
+        );
+    }
+}
+
+#[test]
+fn test_microvm_is_not_suggested_because_it_has_no_pci_bus() {
+    let caps = QemuCapabilities {
+        machines: vec!["q35".into(), "microvm".into()],
+        ..Default::default()
+    };
+    assert!(
+        !offered_machine_types(Arch::X86_64, Some(&caps)).contains(&"microvm"),
+        "the default virtio-vga, virtio-net-pci and usb-tablet all need PCI"
+    );
+}
+
+#[test]
+fn test_no_machine_type_is_suggested_that_qemu_rejects() {
+    let caps = QemuCapabilities {
+        machines: vec!["q35".into(), "pc-i440fx-9.2".into(), "microvm".into()],
+        ..Default::default()
+    };
+    let offered = offered_machine_types(Arch::X86_64, Some(&caps));
+    assert!(offered.contains(&"q35"));
+    assert!(
+        !offered.contains(&"pc-i440fx"),
+        "the bare i440fx name is rejected by QEMU: {:?}",
+        offered
+    );
+}
+
+#[test]
+fn test_a_machine_this_qemu_lacks_is_not_suggested() {
+    let caps = QemuCapabilities {
+        machines: vec!["q35".into()],
+        ..Default::default()
+    };
+    let offered = offered_machine_types(Arch::X86_64, Some(&caps));
+    assert_eq!(offered, vec!["q35"]);
+}
+
+#[test]
+fn test_haxm_is_not_offered_on_windows() {
+    let offered = offered_accelerators();
+    assert!(offered.contains(&Accelerator::TCG));
+
+    #[cfg(target_os = "windows")]
+    assert!(
+        !offered.contains(&Accelerator::HAXM),
+        "HAXM used to be bent silently onto WHPX: {:?}",
+        offered
+    );
+    #[cfg(not(target_os = "windows"))]
+    assert!(offered.contains(&Accelerator::HAXM));
+}
+
+#[test]
+fn test_system_tab_renders_the_firmware_selector() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                .with_capabilities(&caps)
+                .show(ui);
+        });
+    });
+    let output = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                .with_capabilities(&caps)
+                .show(ui);
+        });
+    });
+
+    let drawn = common::rendered_text(&output);
+    assert!(
+        drawn.contains(i18n.t("firmware_bios")) && drawn.contains(i18n.t("firmware_uefi")),
+        "both firmware kinds must be choosable, drew:
+{}",
+        drawn
+    );
+}
+
+// Important 7
+#[test]
+fn test_the_missing_firmware_hint_follows_what_the_app_resolved() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.firmware = Firmware::Uefi {
+        nvram: std::path::PathBuf::from("nvram.fd"),
+    };
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+
+    // The panel must not go looking for the firmware itself: that is a
+    // handful of is_file calls on every frame it draws. It is told once.
+    for (available, expected) in [(false, true), (true, false)] {
+        let ctx = Context::default();
+        let mut draw = || {
+            ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                        .with_capabilities(&caps)
+                        .with_firmware(available)
+                        .show(ui);
+                });
+            })
+        };
+        let _ = draw();
+        let output = draw();
+        let drawn = common::rendered_text(&output);
+        assert_eq!(
+            drawn.contains(i18n.t("firmware_missing")),
+            expected,
+            "firmware available = {}, drew:
+{}",
+            available,
+            drawn
+        );
+    }
+}
+
+// Important 9
+#[test]
+fn test_port_forwards_say_so_when_the_backend_cannot_apply_them() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    vm.network.backend = "none".to_string();
+    vm.network.port_forwards.push(PortForwardRule {
+        host_port: 2222,
+        guest_port: 22,
+        proto: "tcp".to_string(),
+    });
+    let mut active = DetailTab::Network;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&caps)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains(i18n.t("forwards_backend_only")),
+        "rules that cannot apply must say so, drew:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_unprobed_options_are_marked_as_unverified() {
+    let i18n = I18n::new("en");
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+
+    // An unprobed capability set permits everything, so the lists are not
+    // filtered. The user is told that rather than left to assume they were.
+    let unprobed = QemuCapabilities::default();
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&unprobed)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains(i18n.t("option_unverified")),
+        "drew:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_a_stored_accelerator_that_is_gone_is_marked_not_silently_replaced() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    // HAXM is absent from modern Windows builds and is bent to WHPX at
+    // start. The stored value stays, so it has to be labelled.
+    vm.accel = Accelerator::HAXM;
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&caps)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains(i18n.t("option_substituted")),
+        "drew:\n{}",
+        drawn
+    );
 }
