@@ -171,3 +171,73 @@ fn test_failing_save_is_reported_to_the_user() {
         "a save that failed must not be silent"
     );
 }
+
+/// All text egui actually drew this frame.
+fn rendered_text(output: &egui::FullOutput) -> String {
+    fn walk(shape: &egui::Shape, out: &mut String) {
+        match shape {
+            egui::Shape::Text(t) => {
+                out.push_str(t.galley.text());
+                out.push('\n');
+            }
+            egui::Shape::Vec(v) => {
+                for s in v {
+                    walk(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = String::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+#[test]
+fn test_render_ui_puts_the_notice_on_screen() {
+    let dir = tempfile::tempdir().unwrap();
+    let vms_path = dir.path().join("vms.json");
+    std::fs::write(&vms_path, "{broken").unwrap();
+
+    let mut app = FaroQemApp::with_paths(dir.path().join("settings.json"), vms_path, None);
+    assert!(!app.notices.is_empty(), "precondition: a notice exists");
+
+    let ctx = Context::default();
+    // First frame warms up fonts and layout; read the second.
+    let _ = ctx.run(Default::default(), |ctx| app.render_ui(ctx));
+    let output = ctx.run(Default::default(), |ctx| app.render_ui(ctx));
+
+    let drawn = rendered_text(&output);
+    assert!(
+        drawn.contains(".corrupt-"),
+        "the notice naming the quarantined file must be visible, drew:\n{}",
+        drawn
+    );
+    assert!(
+        !app.notices.is_empty(),
+        "a notice stays until it is dismissed"
+    );
+}
+
+#[test]
+fn test_render_ui_without_notices_draws_no_band() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = FaroQemApp::with_paths(
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+        None,
+    );
+    assert!(app.notices.is_empty(), "precondition: nothing to report");
+
+    let ctx = Context::default();
+    let _ = ctx.run(Default::default(), |ctx| app.render_ui(ctx));
+    let output = ctx.run(Default::default(), |ctx| app.render_ui(ctx));
+
+    let i18n = I18n::new("en");
+    assert!(
+        !rendered_text(&output).contains(i18n.t("notice_dismiss")),
+        "an empty band must not take up room"
+    );
+}

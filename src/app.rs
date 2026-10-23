@@ -15,7 +15,7 @@ use crate::qemu::{
     build_qemu_args, find_qemu_binary, find_qemu_img, spawn_qemu, QemuEvent, VmProcess,
 };
 use crate::ui::console::ConsoleLogBuffer;
-use crate::ui::notice::Notice;
+use crate::ui::notice::{Notice, NoticeBar};
 use crate::ui::settings::SettingsDialog;
 use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
 use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
@@ -448,7 +448,19 @@ impl FaroQemApp {
         let mut menu_sidebar_action: Option<SidebarAction> = None;
         let mut menu_detail_action: Option<VmDetailAction> = None;
 
-        // 2. Top Menu Bar (Global application commands & Settings)
+        // 2. Notice band: problems with the stored configuration, above
+        // everything else so they cannot be missed. Taken out of `self` for the
+        // duration, because the band needs `notices` mutably and `i18n` for its
+        // labels at the same time.
+        if !self.notices.is_empty() {
+            let mut notices = std::mem::take(&mut self.notices);
+            egui::TopBottomPanel::top("notice_bar").show(ctx, |ui| {
+                NoticeBar::new(&mut notices).show(ui, &self.i18n);
+            });
+            self.notices = notices;
+        }
+
+        // 3. Top Menu Bar (Global application commands & Settings)
         egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 // File Menu
