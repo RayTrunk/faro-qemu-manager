@@ -58,7 +58,7 @@ fn test_create_disk_state_lifecycle() {
     assert!(state.path_buf.is_empty());
     assert_eq!(state.status_msg, None);
 
-    state.open_dialog("ubuntu_disk.qcow2");
+    state.open_dialog(None, "ubuntu_disk.qcow2");
     assert!(state.open);
     assert_eq!(state.path_buf, "ubuntu_disk.qcow2");
     assert_eq!(state.status_msg, None);
@@ -70,9 +70,31 @@ fn test_create_disk_state_lifecycle() {
     assert!(!state.open);
 
     // Reopening clears previous status message
-    state.open_dialog("");
+    state.open_dialog(None, "");
     assert!(state.open);
     assert_eq!(state.status_msg, None);
+}
+
+#[test]
+fn test_a_second_disk_is_proposed_inside_the_machines_own_folder() {
+    // Spec 5.7: a bare filename lands wherever the app was launched from,
+    // which is how a stray debian_12.qcow2 ends up in the project directory.
+    let base = PathBuf::from(r"C:\Users\someone\FARO-VMs\Debian");
+    let mut state = CreateDiskState::default();
+
+    state.open_dialog(Some(&base), "second.qcow2");
+
+    let proposed = PathBuf::from(&state.path_buf);
+    assert!(
+        proposed.is_absolute(),
+        "a bare name is written next to the executable, got: {}",
+        state.path_buf
+    );
+    assert!(
+        proposed.starts_with(&base),
+        "the machine's own folder is where its disks belong, got: {}",
+        state.path_buf
+    );
 }
 
 #[test]

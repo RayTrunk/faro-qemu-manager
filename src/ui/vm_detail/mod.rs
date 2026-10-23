@@ -93,12 +93,21 @@ impl CreateDiskState {
         Self::default()
     }
 
-    /// Open modal dialog with an optional default filename
-    pub fn open_dialog(&mut self, default_filename: &str) {
+    /// Open the dialog, proposing a path for the new image.
+    ///
+    /// `base` is the machine's own folder. Without it a bare filename is
+    /// proposed, and a bare filename is written wherever the application was
+    /// launched from -- which is how a stray disk image ends up in the
+    /// project directory (spec section 5.7). With it, the proposal lands
+    /// beside the machine's other files.
+    pub fn open_dialog(&mut self, base: Option<&Path>, default_filename: &str) {
         self.open = true;
         self.status_msg = None;
         if self.path_buf.is_empty() && !default_filename.is_empty() {
-            self.path_buf = default_filename.to_string();
+            self.path_buf = match base {
+                Some(dir) => dir.join(default_filename).display().to_string(),
+                None => default_filename.to_string(),
+            };
         }
     }
 
@@ -120,6 +129,10 @@ pub struct VmDetailView<'a> {
     pub pid: Option<u32>,
     pub cli_command: Option<&'a str>,
     pub logo: Option<&'a egui::TextureHandle>,
+    /// The machine's own folder under the VM directory, when it has one.
+    /// New files -- a second disk, a variable store -- are proposed inside
+    /// it rather than next to the executable.
+    pub vm_folder: Option<&'a Path>,
     /// What the installed QEMU can do. `None` means nobody asked.
     pub capabilities: Option<&'a QemuCapabilities>,
     /// Whether the app found the firmware a UEFI machine needs. Resolved once
@@ -154,6 +167,7 @@ impl<'a> VmDetailView<'a> {
             pid: None,
             cli_command: None,
             logo: None,
+            vm_folder: None,
             capabilities: None,
             uefi_available: true,
             findings: &[],
@@ -175,6 +189,12 @@ impl<'a> VmDetailView<'a> {
 
     pub fn with_capabilities(mut self, caps: &'a QemuCapabilities) -> Self {
         self.capabilities = Some(caps);
+        self
+    }
+
+    /// Tell the panel where this machine's files belong.
+    pub fn with_vm_folder(mut self, folder: Option<&'a Path>) -> Self {
+        self.vm_folder = folder;
         self
     }
 

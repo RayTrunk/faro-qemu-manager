@@ -60,7 +60,7 @@ impl<'a> VmDetailView<'a> {
                     if ui.add(create_modal_btn).clicked() {
                         let default_name =
                             format!("{}.qcow2", self.vm.name.replace(' ', "_").to_lowercase());
-                        self.disk_modal.open_dialog(&default_name);
+                        self.disk_modal.open_dialog(self.vm_folder, &default_name);
                     }
                 });
             });

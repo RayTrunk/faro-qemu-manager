@@ -191,6 +191,53 @@ fn test_a_network_backend_this_qemu_lacks_blocks() {
 }
 
 #[test]
+fn test_an_unavailable_backend_says_what_would_be_used_instead() {
+    // Spec section 11.6: a stored value this build cannot use is kept, and
+    // the interface names what to use instead. Being told "no such backend"
+    // and nothing else leaves the user to guess.
+    let dir = tempdir().unwrap();
+    let mut vm = healthy_vm(dir.path());
+    vm.network.backend = "tap".to_string();
+    let Some(caps) = probed_caps() else {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    };
+    let findings = check_vm(&vm, &host(), Some(&caps), None, &I18n::new("en"));
+    let said = findings
+        .iter()
+        .map(|f| f.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        said.contains("user"),
+        "the replacement belongs in the text, got: {}",
+        said
+    );
+}
+
+#[test]
+fn test_an_unknown_machine_type_says_what_would_be_used_instead() {
+    let dir = tempdir().unwrap();
+    let mut vm = healthy_vm(dir.path());
+    vm.machine_type = "pc-i440fx".to_string();
+    let Some(caps) = probed_caps() else {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    };
+    let findings = check_vm(&vm, &host(), Some(&caps), None, &I18n::new("en"));
+    let said = findings
+        .iter()
+        .map(|f| f.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        said.contains("q35"),
+        "the replacement belongs in the text, got: {}",
+        said
+    );
+}
+
+#[test]
 fn test_a_machine_type_the_running_qemu_does_not_know_blocks() {
     let dir = tempdir().unwrap();
     let mut vm = healthy_vm(dir.path());

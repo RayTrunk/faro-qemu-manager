@@ -923,3 +923,292 @@ fn test_duplicating_a_hand_made_vm_says_the_image_stays_shared() {
         "an image outside the VM directory stays a shared reference"
     );
 }
+
+// --------------------------------------------------------------------------
+// Final review of the branch: what the fix pass answers
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_a_copied_folder_with_the_same_marker_is_not_the_one_taken() {
+    // C1: copying a VM folder in Explorer copies its vm-id marker too. Two
+    // folders then claim the machine, and taking "the first one found" is a
+    // coin toss over the user's backup.
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = alpine_in(&mut app, "Debian");
+
+    let real = app.vms.iter().find(|v| v.id == id).unwrap().drives[0]
+        .path
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    // A backup whose name sorts ahead of the original.
+    let backup = root.join("01-Backup of Debian");
+    std::fs::create_dir_all(&backup).unwrap();
+    std::fs::copy(real.join("vm-id"), backup.join("vm-id")).unwrap();
+    std::fs::write(backup.join("KEEP.qcow2"), b"the user's backup").unwrap();
+
+    app.delete_vm(id, true);
+
+    assert!(
+        backup.is_dir() && backup.join("KEEP.qcow2").is_file(),
+        "the backup is not the machine's folder and must survive"
+    );
+    assert!(
+        !real.exists(),
+        "the folder that actually holds the disk is the one consent was for"
+    );
+}
+
+#[test]
+fn test_an_ambiguous_folder_is_taken_from_nobody() {
+    // Same marker twice and no disk to break the tie: guessing would be a
+    // guess about which directory to destroy.
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+
+    let mut vm = VmConfig::new_default("empty", Arch::X86_64);
+    let id = vm.id;
+    vm.drives.clear();
+    app.vms.push(vm);
+
+    let a = claim_vm_folder(&root, "empty", id).unwrap();
+    let b = root.join("00-also-empty");
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::copy(a.join("vm-id"), b.join("vm-id")).unwrap();
+
+    app.delete_vm(id, true);
+
+    assert!(
+        a.is_dir() && b.is_dir(),
+        "neither folder may be removed on a guess"
+    );
+}
+
+#[test]
+fn test_a_folder_holding_another_machines_disk_is_not_taken() {
+    // I7: the user pointed VM B's disk into VM A's folder. Deleting A with
+    // consent must not take B's disk with it; B's dialog never mentioned it.
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let a = alpine_in(&mut app, "A");
+    let a_folder = app.vms.iter().find(|v| v.id == a).unwrap().drives[0]
+        .path
+        .parent()
+        .unwrap()
+        .to_path_buf();
+
+    let b_disk = a_folder.join("b.qcow2");
+    std::fs::write(&b_disk, b"B's DISK").unwrap();
+    let _b = hand_made_pointing_at(&mut app, &b_disk);
+
+    app.delete_vm(a, true);
+
+    assert!(
+        b_disk.is_file(),
+        "another machine's disk lives in that folder"
+    );
+}
+
+#[test]
+fn test_every_image_the_copy_still_shares_is_named() {
+    // I1: whatever the reason a copy ends up on the original's image -- the
+    // folder could not be claimed, the copy failed, the file is elsewhere --
+    // the user hears which image, by name. Silence here costs a disk.
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = alpine_in(&mut app, "Alpine");
+
+    // A second drive inside the VM directory whose file is not there, so the
+    // copy of it cannot succeed.
+    let folder = app.vms.iter().find(|v| v.id == id).unwrap().drives[0]
+        .path
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let ghost = folder.join("second.qcow2");
+    let pos = app.vms.iter().position(|v| v.id == id).unwrap();
+    app.vms[pos].drives.push(DriveConfig {
+        path: ghost.clone(),
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::VirtIO,
+        boot_index: None,
+    });
+    let originals: Vec<_> = app.vms[pos].drives.iter().map(|d| d.path.clone()).collect();
+    app.notices.clear();
+
+    app.handle_sidebar_action(SidebarAction::DuplicateVm(id), None);
+
+    let said = app
+        .notices
+        .iter()
+        .map(|n| n.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let copy = app
+        .vms
+        .iter()
+        .find(|v| v.id != id && v.name.contains("Alpine"))
+        .expect("the copy is in the list");
+    for (index, drive) in copy.drives.iter().enumerate() {
+        if drive.path == originals[index] {
+            let name = drive.path.file_name().unwrap().to_string_lossy();
+            assert!(
+                said.contains(name.as_ref()),
+                "the copy still shares {} and nothing said so; notices were:\n{}",
+                name,
+                said
+            );
+        }
+    }
+}
+
+#[test]
+fn test_a_missing_image_is_not_called_outside_the_vm_directory() {
+    // An image the user deleted in Explorer is inside the VM directory and
+    // gone. Saying "lies outside the VM directory" is false in both halves.
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = alpine_in(&mut app, "Alpine");
+    let disk = app.vms.iter().find(|v| v.id == id).unwrap().drives[0]
+        .path
+        .clone();
+    std::fs::remove_file(&disk).unwrap();
+    app.notices.clear();
+
+    app.handle_sidebar_action(SidebarAction::DuplicateVm(id), None);
+
+    let said = app
+        .notices
+        .iter()
+        .map(|n| n.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        said.contains(&disk.file_name().unwrap().to_string_lossy().to_string()),
+        "the image is named, got:\n{}",
+        said
+    );
+    // The catalogue has one sentence for "outside the VM directory" and one
+    // for "not there at all". A gone file must get the second.
+    let i18n = faro_qem::i18n::I18n::new("en");
+    // Both sentences open with the same words and differ in what follows the
+    // path, so that is the part worth comparing.
+    let marker_of = |key: &str| {
+        i18n.t(key)
+            .split("{path}")
+            .nth(1)
+            .unwrap_or("")
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let missing = marker_of("duplicate_image_missing");
+    let outside = marker_of("duplicate_image_shared");
+    assert!(
+        !missing.is_empty() && said.contains(&missing),
+        "a gone image is reported as gone; said:\n{}",
+        said
+    );
+    assert!(
+        !said.contains(&outside),
+        "a gone image is not an image outside the directory; said:\n{}",
+        said
+    );
+}
+
+#[test]
+fn test_a_copy_whose_folder_cannot_be_made_still_names_every_shared_image() {
+    // I1: the folder claim is the one failure that used to break out of the
+    // loop, leaving the copy on the original's images in silence. The
+    // trigger is ordinary: a name long enough that the copy's folder path
+    // passes Windows' limit.
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let orig = root.join("orig");
+    std::fs::create_dir_all(&orig).unwrap();
+    let disk = orig.join("disk.qcow2");
+    std::fs::write(&disk, b"IMAGE").unwrap();
+
+    let mut app = common::app_with_vm_dir(&root);
+    let long_name = "L".repeat(240);
+    let mut vm = VmConfig::new_default(&long_name, Arch::X86_64);
+    vm.drives.push(DriveConfig {
+        path: disk.clone(),
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::VirtIO,
+        boot_index: None,
+    });
+    let id = vm.id;
+    app.vms.push(vm);
+    app.notices.clear();
+
+    app.handle_sidebar_action(SidebarAction::DuplicateVm(id), None);
+
+    let copy = app
+        .vms
+        .iter()
+        .find(|v| v.id != id && v.name.contains(&long_name))
+        .expect("the copy is in the list");
+    let said = app
+        .notices
+        .iter()
+        .map(|n| n.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if copy.drives[0].path == disk {
+        assert!(
+            said.contains("disk.qcow2"),
+            "the copy shares the original's image and nothing named it; said:\n{}",
+            said
+        );
+    }
+}
+
+#[test]
+fn test_a_failed_creation_leaves_the_wizard_standing_with_its_entries() {
+    // I4: a fresh installation defaults to the wizard and has no QEMU
+    // directory set yet. Choosing a template, typing a name and picking a
+    // 6 GB ISO, only to have all three thrown away with the message, means
+    // doing it again -- with the same result, until the settings are found.
+    let dir = tempdir().unwrap();
+    let vm_dir = dir.path().join("FARO-VMs");
+    std::fs::create_dir_all(&vm_dir).unwrap();
+    let mut app = common::app_with_vm_dir(&vm_dir);
+
+    // A VM directory that cannot hold a folder: the claim fails.
+    let blocked = dir.path().join("blocked");
+    std::fs::write(&blocked, b"a file where the directory must go").unwrap();
+    app.settings.vm_dir = Some(blocked);
+
+    app.wizard.select("alpine");
+    app.wizard.name = "Alpine".to_string();
+    app.wizard.iso = r"C:\isos\alpine.iso".to_string();
+
+    let Some(draft) = app.wizard.take_draft() else {
+        panic!("the draft is handed out");
+    };
+    let err = app
+        .create_from_wizard(draft, 1)
+        .expect_err("an unusable VM directory must be reported");
+    assert!(!err.is_empty());
+
+    // The caller tells the wizard it did not work. Everything the user typed
+    // is still there and the dialog is still on screen.
+    app.wizard.creation_failed();
+    assert!(app.wizard.open, "the dialog stays, or the entries are lost");
+    assert_eq!(app.wizard.name, "Alpine");
+    assert_eq!(app.wizard.iso, r"C:\isos\alpine.iso");
+    assert!(
+        app.wizard.why_not_create().is_none(),
+        "the entries are complete, so Create is still offered"
+    );
+}

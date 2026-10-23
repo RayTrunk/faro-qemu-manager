@@ -9,10 +9,6 @@ use crate::config::{Accelerator, Arch, Firmware};
 use crate::qemu::nvram_path_for;
 use crate::ui::theme::{card_frame, icons, COLOR_ERROR, COLOR_PRIMARY, COLOR_WARNING};
 
-/// Graphics adapters worth offering for `arch`.
-///
-/// `-vga` and its named types are an x86 convenience. On every other
-/// architecture QEMU has no VGA adapter and answers `Virtio VGA not
 use super::offers::*;
 use super::VmDetailView;
 

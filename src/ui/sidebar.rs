@@ -79,6 +79,9 @@ pub struct SidebarView<'a> {
     /// The folder deleting the machine under confirmation could take, when it
     /// has one under the VM directory. Without it, no box is offered.
     pub delete_folder: Option<&'a Path>,
+    /// Which machine `delete_folder` was worked out for. The box is drawn
+    /// only when that is the machine the dialog is about.
+    pub delete_folder_for: Option<Uuid>,
     /// Whether that box is ticked. The caller owns it so that it survives
     /// between frames, and resets it when the dialog opens.
     pub delete_with_folder: Option<&'a mut bool>,
@@ -102,14 +105,21 @@ impl<'a> SidebarView<'a> {
             confirming_delete_id: None,
             logo: None,
             delete_folder: None,
+            delete_folder_for: None,
             delete_with_folder: None,
         }
     }
 
     /// Offer the delete dialog a folder it may take, and the tick that says so.
-    pub fn with_delete_folder(mut self, consent: &'a mut bool, folder: Option<&'a Path>) -> Self {
+    pub fn with_delete_folder(
+        mut self,
+        consent: &'a mut bool,
+        folder: Option<&'a Path>,
+        folder_for: Option<Uuid>,
+    ) -> Self {
         self.delete_with_folder = Some(consent);
         self.delete_folder = folder;
+        self.delete_folder_for = folder_for;
         self
     }
 
@@ -421,10 +431,16 @@ impl<'a> SidebarView<'a> {
                         // The files are the user's. The box names the folder
                         // it would take and starts unticked, so that losing a
                         // disk needs a deliberate click, never a reflex.
+                        // Only for the machine the folder was worked out
+                        // for. On the frame the dialog opens for a second
+                        // machine, the caller has not reset the tick yet, and
+                        // a stale consent must not reach delete_vm.
                         let mut take_folder = false;
-                        if let (Some(folder), Some(consent)) =
-                            (self.delete_folder, self.delete_with_folder.as_mut())
-                        {
+                        if let (Some(folder), Some(consent)) = (
+                            self.delete_folder
+                                .filter(|_| self.delete_folder_for == Some(del_id)),
+                            self.delete_with_folder.as_mut(),
+                        ) {
                             ui.add_space(8.0);
                             ui.checkbox(
                                 consent,

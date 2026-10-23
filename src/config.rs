@@ -575,11 +575,23 @@ pub fn claim_vm_folder(root: &Path, name: &str, id: Uuid) -> Result<PathBuf, Str
     let chosen = if folder_is_free_or_ours(&preferred, id) {
         preferred
     } else {
-        root.join(format!(
+        let fallback = root.join(format!(
             "{}-{}",
             vm_folder_name(name, id),
             &id.simple().to_string()[..8]
-        ))
+        ));
+        // The fallback is checked too. An id collision in the first eight hex
+        // digits is unlikely, but adopting a folder that belongs to another
+        // machine would put two QEMU processes on one disk, and the check is
+        // one file read.
+        if folder_is_free_or_ours(&fallback, id) {
+            fallback
+        } else {
+            return Err(format!(
+                "Both candidate folders under {} belong to other machines",
+                root.display()
+            ));
+        }
     };
 
     std::fs::create_dir_all(&chosen)
@@ -607,30 +619,64 @@ fn folder_belongs_to(folder: &Path, id: Uuid) -> bool {
         .is_ok_and(|owner| owner.trim() == id.to_string())
 }
 
-/// The folder under `root` whose marker names this VM, if there is one.
+/// Every folder under `root` whose marker names this VM.
 ///
 /// Reading the marker rather than rebuilding the name from the VM's is what
 /// makes this survive a rename: the folder keeps whatever name it was created
 /// with, and the marker is the only thing that says whose it is. Only direct
 /// children of `root` are considered, so nothing outside the VM directory can
 /// ever be named here.
-pub fn find_vm_folder(root: &Path, id: Uuid) -> Option<PathBuf> {
-    std::fs::read_dir(root)
-        .ok()?
+///
+/// The answer is a list, not one folder, because a marker is a file and files
+/// get copied. Someone who duplicates a VM folder in Explorer before a risky
+/// change has two folders claiming the same machine, and picking whichever
+/// the directory lists first is a coin toss over their backup. Callers that
+/// delete must decide deliberately what to do with more than one.
+pub fn find_vm_folders(root: &Path, id: Uuid) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
-        .find(|path| path.is_dir() && folder_belongs_to(path, id))
+        .filter(|path| path.is_dir() && folder_belongs_to(path, id))
+        .collect()
+}
+
+/// Where a path lies relative to `root`.
+///
+/// `Unresolvable` is its own answer and not a kind of `Outside`: a file the
+/// user deleted in Explorer, or one on a drive that is not mounted, is not a
+/// file somewhere else. Reporting it as "outside the VM directory" would be
+/// false in both halves, and the messages built on this say what they will
+/// not do about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Containment {
+    Inside,
+    Outside,
+    Unresolvable,
+}
+
+/// Whether `path` sits inside `root`.
+///
+/// Both sides are resolved first, so a path woven out of `..` cannot present
+/// itself as a child.
+pub fn containment(root: &Path, path: &Path) -> Containment {
+    let Ok(root) = root.canonicalize() else {
+        return Containment::Unresolvable;
+    };
+    match path.canonicalize() {
+        Ok(path) if path != root && path.starts_with(&root) => Containment::Inside,
+        Ok(_) => Containment::Outside,
+        // A path that does not resolve may still be named inside the
+        // directory; what it is not is a file somewhere else.
+        Err(_) => Containment::Unresolvable,
+    }
 }
 
 /// Whether `path` sits inside `root` — the test deletion has to pass.
-///
-/// Both sides are resolved first, so a path woven out of `..` cannot present
-/// itself as a child. A path that cannot be resolved is not inside anything.
 pub fn is_inside(root: &Path, path: &Path) -> bool {
-    match (root.canonicalize(), path.canonicalize()) {
-        (Ok(root), Ok(path)) => path != root && path.starts_with(&root),
-        _ => false,
-    }
+    containment(root, path) == Containment::Inside
 }
 
 /// Why a configuration file could not be loaded.

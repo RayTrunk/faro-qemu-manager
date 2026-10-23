@@ -6,10 +6,6 @@
 use crate::config::PortForwardRule;
 use crate::ui::theme::{card_frame, danger_button, icons, COLOR_WARNING};
 
-/// Graphics adapters worth offering for `arch`.
-///
-/// `-vga` and its named types are an x86 convenience. On every other
-/// architecture QEMU has no VGA adapter and answers `Virtio VGA not
 use super::offers::*;
 use super::VmDetailView;
 
@@ -52,6 +48,18 @@ impl<'a> VmDetailView<'a> {
                                 .size(11.0)
                                 .color(ui.visuals().weak_text_color()),
                         );
+                        // Section 11.6: a stored value this build cannot use
+                        // is kept and marked, the same way the accelerator
+                        // field marks one. Without this the combo shows
+                        // `bridge` while the list offers only user and none,
+                        // and nothing says which of the two is the truth.
+                        if !net_backends.contains(&self.vm.network.backend.as_str()) {
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("option_substituted"))
+                                    .size(11.0)
+                                    .color(COLOR_WARNING),
+                            );
+                        }
                     });
                     if !self.vm.network.port_forwards.is_empty()
                         && !self.vm.network.backend.eq_ignore_ascii_case("user")

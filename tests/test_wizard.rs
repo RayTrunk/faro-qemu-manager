@@ -6,7 +6,7 @@ mod common;
 
 use egui::Context;
 
-use faro_qem::config::Arch;
+use faro_qem::config::{Arch, Firmware};
 use faro_qem::i18n::I18n;
 use faro_qem::qemu::QemuCapabilities;
 use faro_qem::templates::VmTemplate;
@@ -208,4 +208,148 @@ fn test_the_wizard_texts_are_in_all_three_catalogues() {
             assert!(keys.contains(key), "{} missing in {}", key, lang);
         }
     }
+}
+
+/// Everything the dialog draws in a window of this size.
+fn render_wizard_in(state: &mut WizardState, width: f32, height: f32) -> String {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let ctx = Context::default();
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(width, height),
+        )),
+        ..Default::default()
+    };
+    let _ = ctx.run(input(), |ctx| {
+        WizardDialog::new(state, &i18n)
+            .with_capabilities(&caps)
+            .show(ctx);
+    });
+    let output = ctx.run(input(), |ctx| {
+        WizardDialog::new(state, &i18n)
+            .with_capabilities(&caps)
+            .show(ctx);
+    });
+    common::rendered_text(&output)
+}
+
+#[test]
+fn test_the_create_button_stays_reachable_in_a_small_window() {
+    // The dialog is anchored and not resizable, so content taller than the
+    // viewport cannot be reached by dragging or stretching -- and its height
+    // is the user's to set, through the two blocks. Windows 11 is the tallest
+    // case: it carries a notice paragraph as well.
+    let i18n = I18n::new("en");
+    let mut state = opened();
+    state.select("windows-11");
+    state.name = "Win 11".to_string();
+    state.hardware_open = true;
+    state.network_open = true;
+
+    let drawn = render_wizard_in(&mut state, 760.0, 300.0);
+
+    assert!(
+        drawn.contains(i18n.t("create")),
+        "the Create button is off the screen with no way to reach it; drew:\n{}",
+        drawn
+    );
+    assert!(
+        drawn.contains(i18n.t("cancel")),
+        "and so is Cancel; drew:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_the_hardware_block_lets_the_firmware_be_changed() {
+    // Spec 5.4: "Aufgeklappt sind alle Werte aenderbar." The block is called
+    // "Hardware and firmware" and its collapsed header prints UEFI or BIOS,
+    // so a user who opens it is looking for that switch. Without it there is
+    // no BIOS Debian and no UEFI Alpine from the wizard.
+    let i18n = I18n::new("en");
+    let mut state = opened();
+    state.select("debian");
+    state.hardware_open = true;
+    let drawn = render_wizard(&mut state);
+    assert!(
+        drawn.contains(i18n.t("firmware_bios")) && drawn.contains(i18n.t("firmware_uefi")),
+        "the block names firmware in its title; drew:
+{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_the_firmware_switch_changes_the_draft() {
+    let mut state = opened();
+    state.select("alpine");
+    assert!(
+        matches!(
+            state.draft.as_ref().unwrap().firmware,
+            Firmware::Bios { .. }
+        ),
+        "alpine starts as BIOS"
+    );
+    state.set_uefi(true);
+    assert!(
+        matches!(
+            state.draft.as_ref().unwrap().firmware,
+            Firmware::Uefi { .. }
+        ),
+        "and can be switched"
+    );
+    state.set_uefi(false);
+    assert!(matches!(
+        state.draft.as_ref().unwrap().firmware,
+        Firmware::Bios { .. }
+    ));
+}
+
+#[test]
+fn test_the_network_block_lets_a_port_forward_be_added() {
+    // The block is called "Network and port forwarding" and its header even
+    // prints a rule count -- which could never be anything but zero, because
+    // nothing in the wizard could add a rule.
+    let i18n = I18n::new("en");
+    let mut state = opened();
+    state.select("debian");
+    state.network_open = true;
+
+    // With no rule yet, the block must at least offer to add one.
+    let drawn = render_wizard(&mut state);
+    assert!(
+        drawn.contains(i18n.t("add_port_forward")),
+        "the block names port forwarding in its title; drew:
+{}",
+        drawn
+    );
+
+    // With a rule, both ports are editable right there.
+    state.add_port_forward();
+    let drawn = render_wizard(&mut state);
+    assert!(
+        drawn.contains(i18n.t("host_port")) && drawn.contains(i18n.t("guest_port")),
+        "a rule must be editable where it stands; drew:
+{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_a_port_forward_added_in_the_wizard_reaches_the_machine() {
+    let mut state = opened();
+    state.select("debian");
+    state.name = "Debian".to_string();
+    state.add_port_forward();
+    let draft = state.draft.as_ref().unwrap();
+    assert_eq!(draft.network.port_forwards.len(), 1);
+
+    let vm = state.take_draft().expect("there is a draft");
+    assert_eq!(
+        vm.network.port_forwards.len(),
+        1,
+        "the rule travels with it"
+    );
 }

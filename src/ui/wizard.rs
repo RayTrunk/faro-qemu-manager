@@ -3,9 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{Accelerator, Arch, DriveInterface, Firmware, VmConfig};
+use crate::config::{Accelerator, Arch, DriveInterface, Firmware, PortForwardRule, VmConfig};
 use crate::i18n::I18n;
-use crate::qemu::QemuCapabilities;
+use crate::qemu::{nvram_path_for, QemuCapabilities};
 use crate::templates::VmTemplate;
 use crate::ui::theme::{card_frame, icons, COLOR_ERROR, COLOR_WARNING};
 use crate::ui::vm_detail::{
@@ -105,17 +105,77 @@ impl WizardState {
     ///
     /// The name comes from the field as it stands now, not from when the tile
     /// was clicked — which is usually before anyone has typed one.
+    ///
+    /// The dialog closes but keeps everything the user chose and typed,
+    /// because the creation can still fail — a first start with no QEMU
+    /// directory set is the ordinary case, not an exotic one. The caller
+    /// reports the outcome: [`WizardState::creation_failed`] puts the dialog
+    /// back as it was, [`WizardState::created`] clears it for the next time.
     pub fn take_draft(&mut self) -> Option<VmConfig> {
-        let mut vm = self.draft.take()?;
+        let mut vm = self.draft.clone()?;
         vm.name = self.name.trim().to_string();
         if !self.iso.trim().is_empty() {
             vm.cdroms = vec![PathBuf::from(self.iso.trim())];
         }
         self.open = false;
-        self.selected = None;
-        self.name.clear();
-        self.iso.clear();
         Some(vm)
+    }
+
+    /// The machine was created. Nothing is left to come back to.
+    pub fn created(&mut self) {
+        self.dismiss();
+    }
+
+    /// Switch the draft between UEFI and BIOS.
+    ///
+    /// The variable store's path is derived from the disk's folder, which the
+    /// draft does not have yet — creation moves the paths and derives it
+    /// then. A placeholder here would be a path nothing writes to, so the
+    /// store is named after the machine and rebased on creation.
+    pub fn set_uefi(&mut self, uefi: bool) {
+        let Some(draft) = self.draft.as_mut() else {
+            return;
+        };
+        draft.firmware = if uefi {
+            Firmware::Uefi {
+                nvram: nvram_path_for(draft),
+            }
+        } else {
+            Firmware::Bios { rom: None }
+        };
+    }
+
+    /// Whether the draft is set to UEFI.
+    pub fn is_uefi(&self) -> bool {
+        self.draft
+            .as_ref()
+            .is_some_and(|d| matches!(d.firmware, Firmware::Uefi { .. }))
+    }
+
+    /// Add a forwarding rule to the draft.
+    ///
+    /// The defaults are SSH, which is what the overwhelming majority of first
+    /// rules are, and both numbers are editable right where they appear.
+    pub fn add_port_forward(&mut self) {
+        if let Some(draft) = self.draft.as_mut() {
+            draft.network.port_forwards.push(PortForwardRule {
+                host_port: 2222,
+                guest_port: 22,
+                proto: "tcp".to_string(),
+            });
+        }
+    }
+
+    /// The creation the last [`WizardState::take_draft`] was for did not work.
+    ///
+    /// Everything the user chose and typed is still here, so the dialog comes
+    /// back as they left it and they can fix the one thing that was wrong —
+    /// rather than re-picking a template, retyping a name and finding a 6 GB
+    /// ISO again, only to meet the same message.
+    pub fn creation_failed(&mut self) {
+        if self.draft.is_some() {
+            self.open = true;
+        }
     }
 
     /// Close without creating anything.
@@ -138,6 +198,9 @@ pub struct WizardDialog<'a> {
     i18n: &'a I18n,
     capabilities: Option<&'a QemuCapabilities>,
     uefi_available: bool,
+    /// What the settings call the default architecture. The empty tile is
+    /// "what the direct way gives", and the direct way uses this.
+    default_arch: Arch,
 }
 
 impl<'a> WizardDialog<'a> {
@@ -147,7 +210,14 @@ impl<'a> WizardDialog<'a> {
             i18n,
             capabilities: None,
             uefi_available: true,
+            default_arch: Arch::X86_64,
         }
+    }
+
+    /// Use this architecture for the empty tile, as the direct way does.
+    pub fn with_default_arch(mut self, arch: Arch) -> Self {
+        self.default_arch = arch;
+        self
     }
 
     pub fn with_capabilities(mut self, caps: &'a QemuCapabilities) -> Self {
@@ -176,13 +246,26 @@ impl<'a> WizardDialog<'a> {
             .default_width(620.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                self.gallery(ui);
-                ui.add_space(8.0);
-                self.always_visible_fields(ui);
-                ui.add_space(8.0);
-                self.hardware_block(ui);
-                self.network_block(ui);
-                self.notices(ui);
+                // The window is anchored and cannot be resized, so content
+                // taller than the viewport cannot be reached by dragging or
+                // stretching — and its height is the user's to set, through
+                // the two blocks. Everything above the buttons scrolls; the
+                // buttons stay outside the scroll area, so Create and Cancel
+                // are on screen whatever is expanded and however small the
+                // window is.
+                let room = ctx.screen_rect().height();
+                egui::ScrollArea::vertical()
+                    .max_height((room - 120.0).max(120.0))
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        self.gallery(ui);
+                        ui.add_space(8.0);
+                        self.always_visible_fields(ui);
+                        ui.add_space(8.0);
+                        self.hardware_block(ui);
+                        self.network_block(ui);
+                        self.notices(ui);
+                    });
                 ui.add_space(8.0);
                 ui.separator();
                 action = self.buttons(ui);
@@ -198,6 +281,7 @@ impl<'a> WizardDialog<'a> {
     /// The tile gallery: six templates plus one empty tile.
     fn gallery(&mut self, ui: &mut egui::Ui) {
         let empty_label = self.i18n.t("wizard_empty_tile").to_string();
+        let default_arch = self.default_arch;
         let state = &mut *self.state;
         card_frame(ui.visuals()).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -209,7 +293,9 @@ impl<'a> WizardDialog<'a> {
                 }
                 let empty_picked = state.selected.is_none() && state.draft.is_some();
                 if ui.selectable_label(empty_picked, &empty_label).clicked() {
-                    let arch = state.draft.as_ref().map(|d| d.arch).unwrap_or(Arch::X86_64);
+                    // The empty tile is what the direct way gives, and the
+                    // direct way starts from the configured architecture.
+                    let arch = state.draft.as_ref().map(|d| d.arch).unwrap_or(default_arch);
                     state.select_empty(arch);
                 }
             });
@@ -270,11 +356,16 @@ impl<'a> WizardDialog<'a> {
             "vga_type",
             "interface",
             "size_gb",
+            "firmware",
+            "firmware_bios",
+            "firmware_uefi",
+            "firmware_missing",
         ]
         .iter()
         .map(|k| self.i18n.t(k).to_string())
         .collect();
         let caps = self.capabilities;
+        let uefi_available = self.uefi_available;
         let was_open = self.state.hardware_open;
         let mut disk_gb = self.state.disk_gb;
         let draft = &mut self.state.draft;
@@ -290,6 +381,31 @@ impl<'a> WizardDialog<'a> {
                     .num_columns(2)
                     .spacing([16.0, 8.0])
                     .show(ui, |ui| {
+                        // Firmware first: it is the half of this block's
+                        // name that the summary line shows, and the one
+                        // choice a guest cannot survive being changed after
+                        // installation.
+                        ui.label(&labels[7]);
+                        ui.horizontal(|ui| {
+                            let is_uefi = matches!(draft.firmware, Firmware::Uefi { .. });
+                            if ui.selectable_label(!is_uefi, &labels[8]).clicked() && is_uefi {
+                                draft.firmware = Firmware::Bios { rom: None };
+                            }
+                            if ui.selectable_label(is_uefi, &labels[9]).clicked() && !is_uefi {
+                                draft.firmware = Firmware::Uefi {
+                                    nvram: nvram_path_for(draft),
+                                };
+                            }
+                            if matches!(draft.firmware, Firmware::Uefi { .. }) && !uefi_available {
+                                ui.label(
+                                    egui::RichText::new(&labels[10])
+                                        .size(11.0)
+                                        .color(COLOR_ERROR),
+                                );
+                            }
+                        });
+                        ui.end_row();
+
                         ui.label(&labels[0]);
                         ui.add(egui::DragValue::new(&mut draft.cpu_cores).range(1..=64));
                         ui.end_row();
@@ -382,6 +498,10 @@ impl<'a> WizardDialog<'a> {
         let backend_label = self.i18n.t("backend").to_string();
         let nic_label = self.i18n.t("nic_model").to_string();
         let forwards_warning = self.i18n.t("forwards_backend_only").to_string();
+        let host_label = self.i18n.t("host_port").to_string();
+        let guest_label = self.i18n.t("guest_port").to_string();
+        let add_label = format!("{} {}", icons::ADD, self.i18n.t("add_port_forward"));
+        let remove_label = format!("{} {}", icons::CLOSE, self.i18n.t("remove"));
         let caps = self.capabilities;
         let was_open = self.state.network_open;
         let draft = &mut self.state.draft;
@@ -418,6 +538,43 @@ impl<'a> WizardDialog<'a> {
                         );
                         ui.end_row();
                     });
+
+                // Port forwarding is the other half of this block's name, and
+                // the summary line counts the rules. Without an editor here
+                // that count could never be anything but zero, and the user
+                // had to create the machine first and find the detail panel.
+                ui.add_space(6.0);
+                let mut remove: Option<usize> = None;
+                for (index, rule) in draft.network.port_forwards.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(&host_label);
+                        ui.add(egui::DragValue::new(&mut rule.host_port).range(1..=65535));
+                        ui.label("->");
+                        ui.label(&guest_label);
+                        ui.add(egui::DragValue::new(&mut rule.guest_port).range(1..=65535));
+                        egui::ComboBox::from_id_salt(format!("wizard_fw_proto_{}", index))
+                            .selected_text(&rule.proto)
+                            .width(64.0)
+                            .show_ui(ui, |ui| {
+                                for proto in ["tcp", "udp"] {
+                                    ui.selectable_value(&mut rule.proto, proto.to_string(), proto);
+                                }
+                            });
+                        if ui.small_button(&remove_label).clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                }
+                if let Some(index) = remove {
+                    draft.network.port_forwards.remove(index);
+                }
+                if ui.button(&add_label).clicked() {
+                    draft.network.port_forwards.push(PortForwardRule {
+                        host_port: 2222,
+                        guest_port: 22,
+                        proto: "tcp".to_string(),
+                    });
+                }
 
                 if !draft.network.port_forwards.is_empty()
                     && !draft.network.backend.eq_ignore_ascii_case("user")

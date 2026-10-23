@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::config::{Accelerator, DriveInterface, Firmware, VmConfig};
 use crate::i18n::I18n;
 use crate::qemu::{resolve_accelerator, QemuCapabilities, UefiFirmware};
-use crate::ui::vm_detail::offered_netdev_backends;
+use crate::ui::vm_detail::{offered_machine_types, offered_netdev_backends};
 
 /// How much a finding matters.
 ///
@@ -175,11 +175,21 @@ pub fn check_vm(
         ));
     }
     let backend = vm.network.backend.trim().to_string();
-    if !backend.is_empty() && !offered_netdev_backends(caps).contains(&backend.as_str()) {
+    let offered_backends = offered_netdev_backends(caps);
+    if !backend.is_empty() && !offered_backends.contains(&backend.as_str()) {
+        // Section 11.6: name what would be used instead. The first backend
+        // this build does offer is the answer; "user" leads the list, which
+        // is also the one that needs no host setup.
         findings.push(blocking(
             i18n,
             "pf_backend_unavailable",
-            &[("backend", &backend)],
+            &[
+                ("backend", &backend),
+                (
+                    "replacement",
+                    offered_backends.first().copied().unwrap_or("none"),
+                ),
+            ],
         ));
     }
 
@@ -187,10 +197,20 @@ pub fn check_vm(
     if let Some(caps) = caps.filter(|c| c.was_probed()) {
         let machine = vm.machine_type.trim();
         if !machine.is_empty() && !caps.has_machine(machine) {
+            let offered = offered_machine_types(vm.arch, Some(caps));
             findings.push(blocking(
                 i18n,
                 "pf_machine_unknown",
-                &[("machine", machine)],
+                &[
+                    ("machine", machine),
+                    (
+                        "replacement",
+                        offered
+                            .first()
+                            .copied()
+                            .unwrap_or(vm.arch.default_machine()),
+                    ),
+                ],
             ));
         }
     }
