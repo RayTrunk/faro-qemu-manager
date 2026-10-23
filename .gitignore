@@ -6,3 +6,4 @@ settings.json
 *.qcow2
 *.img
 FLUX-*.jpeg
+.superpowers/
