@@ -2,8 +2,8 @@
 // Resilience of configuration persistence: atomic writes, corrupt files, quarantine
 
 use faro_qem::config::{
-    save_settings, save_vms, try_load_settings, try_load_vms, AppSettings, Arch, ConfigLoadError,
-    VmConfig,
+    quarantine_file, save_settings, save_vms, try_load_settings, try_load_vms, AppSettings, Arch,
+    ConfigLoadError, VmConfig,
 };
 use tempfile::tempdir;
 
@@ -153,6 +153,46 @@ fn test_try_load_settings_distinguishes_missing_from_corrupt() {
         try_load_settings(&path).unwrap_err(),
         ConfigLoadError::Corrupt { .. }
     ));
+}
+
+#[test]
+fn test_quarantine_moves_file_aside_with_content_intact() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vms.json");
+    std::fs::write(&path, "ORIGINAL CONTENT").unwrap();
+
+    let moved = quarantine_file(&path).expect("quarantine succeeds");
+
+    assert!(moved != path);
+    assert_eq!(moved.parent(), path.parent(), "stays next to the original");
+    assert_eq!(std::fs::read_to_string(&moved).unwrap(), "ORIGINAL CONTENT");
+    assert!(!path.exists(), "original path is freed for a fresh start");
+}
+
+// Review Focus 3
+#[test]
+fn test_quarantine_twice_keeps_both_copies() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vms.json");
+
+    std::fs::write(&path, "FIRST").unwrap();
+    let first = quarantine_file(&path).unwrap();
+
+    std::fs::write(&path, "SECOND").unwrap();
+    let second = quarantine_file(&path).unwrap();
+
+    assert_ne!(
+        first, second,
+        "the earlier quarantine must not be clobbered"
+    );
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), "FIRST");
+    assert_eq!(std::fs::read_to_string(&second).unwrap(), "SECOND");
+}
+
+#[test]
+fn test_quarantine_reports_error_for_missing_file() {
+    let dir = tempdir().unwrap();
+    assert!(quarantine_file(&dir.path().join("absent.json")).is_err());
 }
 
 #[test]

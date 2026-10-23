@@ -471,6 +471,59 @@ pub fn save_settings(path: &Path, settings: &AppSettings) -> Result<(), String> 
     write_config_file(path, json.as_bytes())
 }
 
+/// Move a configuration file aside under a timestamped sibling name.
+///
+/// Used when a file cannot be read: the user's bytes are preserved so they can
+/// recover them, and the original path is freed so the application can start.
+/// An existing quarantine is never replaced — a second failure gets its own
+/// name, because the first copy may be the one worth recovering.
+///
+/// Returns the path the file now lives at.
+pub fn quarantine_file(path: &Path) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Err(format!("Nothing to set aside at {}", path.display()));
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let base_name = path.file_name().unwrap_or_default().to_os_string();
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+
+    for attempt in 0..1000u32 {
+        let mut name = base_name.clone();
+        if attempt == 0 {
+            name.push(format!(".corrupt-{}", stamp));
+        } else {
+            name.push(format!(".corrupt-{}-{}", stamp, attempt));
+        }
+        let target = match parent {
+            Some(dir) => dir.join(&name),
+            None => PathBuf::from(&name),
+        };
+        if target.exists() {
+            continue;
+        }
+        return std::fs::rename(path, &target)
+            .map(|()| target.clone())
+            .map_err(|e| {
+                format!(
+                    "Failed to set {} aside as {}: {}",
+                    path.display(),
+                    target.display(),
+                    e
+                )
+            });
+    }
+
+    Err(format!(
+        "Could not find a free name to set {} aside",
+        path.display()
+    ))
+}
+
 /// Build a unique staging path next to `path`, used for an atomic write.
 ///
 /// The staging file must live in the same directory as the target so that the
