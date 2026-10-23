@@ -185,6 +185,9 @@ pub struct QemuCapabilities {
     pub devices: Vec<String>,
     pub netdev_backends: Vec<String>,
     pub accelerators: Vec<String>,
+    /// Display backends. These cannot be checked by launching QEMU, because the
+    /// acceptance probe passes `-display none` itself and the last one wins.
+    pub displays: Vec<String>,
 }
 
 impl QemuCapabilities {
@@ -194,6 +197,7 @@ impl QemuCapabilities {
             || !self.devices.is_empty()
             || !self.netdev_backends.is_empty()
             || !self.accelerators.is_empty()
+            || !self.displays.is_empty()
     }
 
     pub fn has_machine(&self, name: &str) -> bool {
@@ -210,6 +214,10 @@ impl QemuCapabilities {
 
     pub fn has_accelerator(&self, name: &str) -> bool {
         list_allows(&self.accelerators, name)
+    }
+
+    pub fn has_display(&self, name: &str) -> bool {
+        list_allows(&self.displays, name)
     }
 }
 
@@ -299,6 +307,7 @@ pub fn probe_capabilities(binary: &Path) -> QemuCapabilities {
         devices: query_help(binary, "-device"),
         netdev_backends: query_help(binary, "-netdev"),
         accelerators: query_help(binary, "-accel"),
+        displays: query_help(binary, "-display"),
     }
 }
 

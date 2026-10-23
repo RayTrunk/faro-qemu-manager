@@ -13,7 +13,10 @@ const PROBE_MEMORY_MB: u32 = 128;
 
 use common::{qemu_accepts, Acceptance};
 use faro_qem::config::{Arch, DriveConfig, DriveFormat, DriveInterface, Firmware, VmConfig};
-use faro_qem::qemu::{build_qemu_args, find_uefi_firmware, prepare_nvram};
+use faro_qem::qemu::{
+    build_qemu_args, find_qemu_binary, find_uefi_firmware, prepare_nvram, probe_capabilities,
+};
+use faro_qem::ui::{offered_machine_types, offered_netdev_backends};
 
 #[test]
 fn test_the_probe_can_tell_good_arguments_from_bad() {
@@ -155,4 +158,121 @@ fn test_qemu_accepts_a_uefi_machine() {
     });
 
     common::assert_accepted("uefi + sata", Arch::X86_64, &build_qemu_args(&vm));
+}
+
+// --------------------------------------------------------------------------
+// The whole selectable surface, one dimension per test
+// --------------------------------------------------------------------------
+
+/// A baseline machine with one working disk; the caller varies one field.
+fn probe_vm(dir: &std::path::Path, tweak: impl FnOnce(&mut VmConfig)) -> VmConfig {
+    let disk = dir.join("probe.qcow2");
+    common::make_empty_qcow2(&disk);
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    vm.memory_mb = PROBE_MEMORY_MB;
+    vm.drives.push(DriveConfig {
+        path: disk,
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::VirtIO,
+        boot_index: None,
+    });
+    tweak(&mut vm);
+    vm
+}
+
+#[test]
+fn test_qemu_accepts_every_vga_type() {
+    let dir = tempfile::tempdir().unwrap();
+    for vga in ["virtio-vga", "std", "qxl", "cirrus", "none"] {
+        let vm = probe_vm(dir.path(), |vm| vm.display.vga_type = vga.to_string());
+        common::assert_accepted(vga, Arch::X86_64, &build_qemu_args(&vm));
+    }
+}
+
+#[test]
+fn test_qemu_accepts_every_nic_model() {
+    let dir = tempfile::tempdir().unwrap();
+    for nic in ["virtio-net-pci", "e1000", "rtl8139", "e1000e", "vmxnet3"] {
+        let vm = probe_vm(dir.path(), |vm| vm.network.nic_model = nic.to_string());
+        common::assert_accepted(nic, Arch::X86_64, &build_qemu_args(&vm));
+    }
+}
+
+#[test]
+fn test_qemu_accepts_every_offered_network_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(bin) = find_qemu_binary(None, Arch::X86_64) else {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    };
+    let caps = probe_capabilities(&bin);
+
+    for backend in offered_netdev_backends(Some(&caps)) {
+        let vm = probe_vm(dir.path(), |vm| vm.network.backend = backend.to_string());
+        common::assert_accepted(backend, Arch::X86_64, &build_qemu_args(&vm));
+    }
+}
+
+#[test]
+fn test_qemu_accepts_every_drive_format() {
+    let dir = tempfile::tempdir().unwrap();
+    for format in DriveFormat::all() {
+        let disk = dir.path().join(format!("f-{}.img", format.as_str()));
+        common::make_disk_image(&disk, *format);
+
+        let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+        vm.memory_mb = PROBE_MEMORY_MB;
+        vm.drives.push(DriveConfig {
+            path: disk,
+            format: *format,
+            interface: DriveInterface::VirtIO,
+            boot_index: None,
+        });
+        common::assert_accepted(format.as_str(), Arch::X86_64, &build_qemu_args(&vm));
+    }
+}
+
+#[test]
+fn test_qemu_accepts_every_offered_machine_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(bin) = find_qemu_binary(None, Arch::X86_64) else {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    };
+    let caps = probe_capabilities(&bin);
+
+    for machine in offered_machine_types(Arch::X86_64, Some(&caps)) {
+        let vm = probe_vm(dir.path(), |vm| vm.machine_type = machine.to_string());
+        common::assert_accepted(machine, Arch::X86_64, &build_qemu_args(&vm));
+    }
+}
+
+/// Display backends cannot be established by launching QEMU: the acceptance
+/// probe passes `-display none` itself and the last one wins, so every value
+/// would look accepted. QEMU's own list is the honest source.
+#[test]
+fn test_every_offered_display_backend_is_one_qemu_knows() {
+    let Some(bin) = find_qemu_binary(None, Arch::X86_64) else {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    };
+    let caps = probe_capabilities(&bin);
+    assert!(caps.was_probed());
+
+    for backend in ["gtk", "sdl", "none"] {
+        assert!(
+            caps.has_display(backend),
+            "the UI offers {} but QEMU does not list it: {:?}",
+            backend,
+            caps.displays
+        );
+    }
+    // "default" is accepted by QEMU but absent from -display help, so it is
+    // checked by launching instead — the probe's own -display none cannot mask
+    // a value QEMU would have rejected outright at parse time.
+    let dir = tempfile::tempdir().unwrap();
+    let vm = probe_vm(dir.path(), |vm| {
+        vm.display.display_backend = "default".to_string()
+    });
+    common::assert_accepted("display=default", Arch::X86_64, &build_qemu_args(&vm));
 }

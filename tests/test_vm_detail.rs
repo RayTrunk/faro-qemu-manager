@@ -401,15 +401,41 @@ fn test_bridge_is_offered_when_qemu_has_it() {
 }
 
 #[test]
-fn test_without_a_probe_every_backend_stays_on_offer() {
+fn test_without_a_probe_capability_dependent_backends_stay_on_offer() {
     let offered = offered_netdev_backends(None);
-    for expected in ["user", "tap", "bridge", "none"] {
+    for expected in ["user", "bridge", "none"] {
         assert!(
             offered.contains(&expected),
             "not knowing must not look like unavailable: {:?}",
             offered
         );
     }
+}
+
+#[test]
+fn test_tap_is_never_offered_because_it_cannot_work_yet() {
+    let with_tap = QemuCapabilities {
+        netdev_backends: vec!["user".into(), "tap".into()],
+        ..Default::default()
+    };
+    for caps in [None, Some(&with_tap)] {
+        assert!(
+            !offered_netdev_backends(caps).contains(&"tap"),
+            "tap answers \"no interface name\"; the configuration has no field for one"
+        );
+    }
+}
+
+#[test]
+fn test_microvm_is_not_suggested_because_it_has_no_pci_bus() {
+    let caps = QemuCapabilities {
+        machines: vec!["q35".into(), "microvm".into()],
+        ..Default::default()
+    };
+    assert!(
+        !offered_machine_types(Arch::X86_64, Some(&caps)).contains(&"microvm"),
+        "the default virtio-vga, virtio-net-pci and usb-tablet all need PCI"
+    );
 }
 
 #[test]
@@ -434,7 +460,7 @@ fn test_a_machine_this_qemu_lacks_is_not_suggested() {
         ..Default::default()
     };
     let offered = offered_machine_types(Arch::X86_64, Some(&caps));
-    assert_eq!(offered, vec!["q35"], "microvm is absent here");
+    assert_eq!(offered, vec!["q35"]);
 }
 
 #[test]
