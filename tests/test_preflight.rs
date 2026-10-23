@@ -398,3 +398,53 @@ fn test_launching_a_vm_with_a_blocking_finding_does_not_start_qemu() {
     assert!(err.contains("disk.qcow2"), "got: {}", err);
     assert!(app.running_processes.is_empty());
 }
+
+// --------------------------------------------------------------------------
+// Part 3b, task 4: an unfinished download holds the start
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_an_unfinished_download_holds_the_start_and_names_the_file() {
+    // Review Focus 3, and spec section 11.5: the machine is created at once
+    // with the target path as its ISO, and the start waits for the bytes.
+    // After a restart the thread is gone, but the .part beside the missing
+    // ISO still tells the truth.
+    let dir = tempdir().unwrap();
+    let mut vm = healthy_vm(dir.path());
+    let iso = dir.path().join("debian.iso");
+    std::fs::write(faro_qem::download::part_path(&iso), b"half of it").unwrap();
+    vm.cdroms.push(iso);
+
+    let findings = check_vm(&vm, &host(), None, None, &I18n::new("en"));
+    let blocking: Vec<_> = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Blocking)
+        .collect();
+    assert_eq!(
+        blocking.len(),
+        1,
+        "an unfinished download is one finding, not also a missing file: {:?}",
+        findings
+    );
+    assert!(
+        blocking[0].text.contains("debian.iso"),
+        "got: {}",
+        blocking[0].text
+    );
+}
+
+#[test]
+fn test_a_finished_download_no_longer_holds_the_start() {
+    let dir = tempdir().unwrap();
+    let mut vm = healthy_vm(dir.path());
+    let iso = dir.path().join("debian.iso");
+    std::fs::write(&iso, b"all of it").unwrap();
+    vm.cdroms.push(iso);
+    assert!(!blocks(&check_vm(
+        &vm,
+        &host(),
+        None,
+        None,
+        &I18n::new("en")
+    )));
+}

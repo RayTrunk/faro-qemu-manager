@@ -53,6 +53,10 @@ pub struct WizardState {
     /// Size of the disk image to make. Not part of the configuration, which
     /// only records where the disk is.
     pub disk_gb: u32,
+    /// Whether the user asked for the ISO to be fetched. Read by the caller
+    /// after the machine exists: spec section 11.5 wants the machine created
+    /// at once and the download running behind it.
+    pub download_requested: bool,
 }
 
 impl Default for WizardState {
@@ -66,6 +70,7 @@ impl Default for WizardState {
             network_open: false,
             draft: None,
             disk_gb: DEFAULT_DISK_GB,
+            download_requested: false,
         }
     }
 }
@@ -124,6 +129,14 @@ impl WizardState {
     /// The machine was created. Nothing is left to come back to.
     pub fn created(&mut self) {
         self.dismiss();
+    }
+
+    /// Fetch the ISO once the machine exists.
+    ///
+    /// Only remembered here. Resolving today's filename means talking to a
+    /// mirror, and that does not happen while a frame is being drawn.
+    pub fn request_download(&mut self) {
+        self.download_requested = true;
     }
 
     /// Switch the draft between UEFI and BIOS.
@@ -185,6 +198,7 @@ impl WizardState {
         self.draft = None;
         self.name.clear();
         self.iso.clear();
+        self.download_requested = false;
     }
 
     fn template(&self) -> Option<&'static VmTemplate> {
@@ -307,7 +321,22 @@ impl<'a> WizardDialog<'a> {
         let name_label = self.i18n.t("vm_name").to_string();
         let iso_label = self.i18n.t("iso_path").to_string();
         let browse = format!("{} {}", icons::FOLDER, self.i18n.t("browse"));
+        let download = self.i18n.t("download").to_string();
+        let open_page = self.i18n.t("open_official_page").to_string();
+        let limit_notice = self.i18n.t("download_limit_notice").to_string();
+        let page_failed = self.i18n.t("open_page_failed").to_string();
+        let filter_iso = self.i18n.t("filter_iso").to_string();
+        // What the chosen template offers: a mirror we can check, or a page
+        // the user fetches from themselves.
+        let template_key = self.state.selected;
+        let has_source = template_key
+            .and_then(VmTemplate::by_key)
+            .and_then(|t| t.iso_source)
+            .and_then(crate::download::source_for)
+            .is_some();
+        let page = template_key.and_then(crate::download::official_page);
         let state = &mut *self.state;
+        let mut open_page_failed: Option<String> = None;
 
         egui::Grid::new("wizard_fields")
             .num_columns(2)
@@ -330,15 +359,44 @@ impl<'a> WizardDialog<'a> {
                     );
                     if ui.button(&browse).clicked() {
                         if let Some(file) = rfd::FileDialog::new()
-                            .add_filter(self.i18n.t("filter_iso"), &["iso", "img"])
+                            .add_filter(&filter_iso, &["iso", "img"])
                             .pick_file()
                         {
                             state.iso = file.to_string_lossy().to_string();
                         }
                     }
+                    // Only where there is a stable, documented, checkable
+                    // address. Everything else gets its page instead, which
+                    // is honest rather than a download that cannot be
+                    // verified.
+                    if has_source {
+                        if ui.button(&download).clicked() {
+                            state.request_download();
+                        }
+                    } else if let Some(url) = page {
+                        if ui.button(&open_page).clicked() {
+                            if let Err(e) = crate::download::open_in_browser(url) {
+                                open_page_failed = Some(page_failed.replace("{error}", &e));
+                            }
+                        }
+                    }
                 });
                 ui.end_row();
             });
+
+        // Spec section 6: the limit belongs in the interface, not only in the
+        // design document.
+        if has_source {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(&limit_notice)
+                    .size(11.0)
+                    .color(ui.visuals().weak_text_color()),
+            );
+        }
+        if let Some(problem) = open_page_failed {
+            ui.label(egui::RichText::new(problem).size(11.0).color(COLOR_ERROR));
+        }
     }
 
     /// Hardware and firmware, collapsed, with its core values in the header.

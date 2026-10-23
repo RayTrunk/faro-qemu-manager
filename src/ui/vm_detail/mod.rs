@@ -144,6 +144,8 @@ pub struct VmDetailView<'a> {
     /// What the start check found for this machine. Shown above the start
     /// button, so a refused start is explained before it is attempted.
     pub findings: &'a [Finding],
+    /// One sentence about a download in flight, when there is one.
+    pub download_status: Option<&'a str>,
 }
 
 impl<'a> VmDetailView<'a> {
@@ -171,6 +173,7 @@ impl<'a> VmDetailView<'a> {
             capabilities: None,
             uefi_available: true,
             findings: &[],
+            download_status: None,
         }
     }
 
@@ -189,6 +192,12 @@ impl<'a> VmDetailView<'a> {
 
     pub fn with_capabilities(mut self, caps: &'a QemuCapabilities) -> Self {
         self.capabilities = Some(caps);
+        self
+    }
+
+    /// Tell the panel what a running download is doing.
+    pub fn with_download_status(mut self, status: Option<&'a str>) -> Self {
+        self.download_status = status;
         self
     }
 
@@ -237,7 +246,10 @@ impl<'a> VmDetailView<'a> {
                 };
                 ui.label(egui::RichText::new(&finding.text).size(11.0).color(colour));
             }
-            if !self.findings.is_empty() {
+            if let Some(status) = self.download_status {
+                ui.label(egui::RichText::new(status).size(11.0).color(COLOR_PRIMARY));
+            }
+            if !self.findings.is_empty() || self.download_status.is_some() {
                 ui.add_space(4.0);
             }
 

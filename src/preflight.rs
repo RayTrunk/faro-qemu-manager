@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use crate::config::{Accelerator, DriveInterface, Firmware, VmConfig};
+use crate::download::part_path;
 use crate::i18n::I18n;
 use crate::qemu::{resolve_accelerator, QemuCapabilities, UefiFirmware};
 use crate::ui::vm_detail::{offered_machine_types, offered_netdev_backends};
@@ -130,13 +131,20 @@ pub fn check_vm(
         }
     }
     for iso in &vm.cdroms {
-        if !path_is_present(iso) {
-            findings.push(blocking(
-                i18n,
-                "pf_missing_iso",
-                &[("path", &iso.display().to_string())],
-            ));
+        if path_is_present(iso) {
+            continue;
         }
+        // A `.part` beside a missing ISO is an unfinished download, not a
+        // missing file, and saying so is the more useful of the two. It is
+        // also the whole of the bookkeeping: it stays true after a restart,
+        // when the thread that was writing it is long gone. Only one finding
+        // per ISO -- two messages about one file would be noise.
+        let key = if part_path(iso).exists() {
+            "pf_download_unfinished"
+        } else {
+            "pf_missing_iso"
+        };
+        findings.push(blocking(i18n, key, &[("path", &iso.display().to_string())]));
     }
     match &vm.firmware {
         Firmware::Uefi { nvram } => {

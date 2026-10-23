@@ -180,6 +180,50 @@ pub fn source_for(key: &str) -> Option<&'static IsoSource> {
     SOURCES.iter().find(|s| s.key == key)
 }
 
+/// The page a user fetches this image from themselves.
+///
+/// Three images are not downloaded, for two different reasons. Microsoft
+/// hands out session-bound links from a form page, so automating it would be
+/// fragile and outside the intended use (spec section 6). virtio-win is here
+/// because its publisher gives no SHA-256 for the ISO at all — only MD5, and
+/// only for RPM packages — and an unverified driver ISO mounted into a
+/// Windows guest is exactly the anti-goal in section 1: something that looks
+/// checked and is not.
+///
+/// These addresses cannot be verified from here: Microsoft answers an
+/// ordinary HTTP client with 403 regardless of whether the page exists. They
+/// are the documented official ones, and the application only ever hands them
+/// to the browser.
+pub fn official_page(key: &str) -> Option<&'static str> {
+    match key {
+        "windows-11" => Some("https://www.microsoft.com/software-download/windows11"),
+        "windows-10" => Some("https://www.microsoft.com/software-download/windows10ISO"),
+        "virtio-win" => {
+            Some("https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/")
+        }
+        _ => None,
+    }
+}
+
+/// Hand a URL to whatever the system uses for the web.
+///
+/// Not a download: the user fetches the file and the application never sees
+/// the transfer, which is the whole point for the three images above.
+pub fn open_in_browser(url: &str) -> Result<(), String> {
+    let result = if cfg!(target_os = "windows") {
+        // The empty "" is the window title start insists on; without it a
+        // URL containing spaces becomes the title and nothing opens.
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", url])
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).spawn()
+    };
+    result.map(|_| ()).map_err(|e| format!("{}: {}", url, e))
+}
+
 /// What a resolution produced: where to fetch, what to call it, what it
 /// must hash to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,6 +376,10 @@ pub fn sha256_of(path: &Path, cancel: &AtomicBool) -> Result<String, String> {
 /// What the worker reports while it runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadEvent {
+    /// Today's filename is known, and this is where it will land. Sent
+    /// before the first byte, so the machine's ISO slot can point at the
+    /// real name and the start check can see the `.part` beside it.
+    Target(PathBuf),
     /// `total` is `None` when the mirror did not state a length.
     Progress { done: u64, total: Option<u64> },
     /// The bytes are all here; the digest is being computed. Worth saying,
@@ -403,6 +451,65 @@ pub fn start(http: Arc<dyn Http>, resolved: Resolved, target: PathBuf) -> Downlo
     });
 
     DownloadHandle { cancel, rx }
+}
+
+/// Resolve today's filename and then fetch it, all in one thread.
+///
+/// `resolve` talks to a mirror, which is why it cannot happen while a frame
+/// is being drawn (spec section 6: the interface must not freeze). The
+/// machine therefore exists before its filename is known, and the worker
+/// sends [`DownloadEvent::Target`] as soon as it is.
+pub fn start_resolving(
+    http: Arc<dyn Http>,
+    source: &'static IsoSource,
+    folder: PathBuf,
+) -> DownloadHandle {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let worker_cancel = Arc::clone(&cancel);
+
+    std::thread::spawn(move || {
+        let resolved = match resolve(source, &*http) {
+            Ok(resolved) => resolved,
+            Err(problem) => {
+                let _ = tx.send(DownloadEvent::Failed(problem));
+                return;
+            }
+        };
+        let target = folder.join(&resolved.file_name);
+        let _ = tx.send(DownloadEvent::Target(target.clone()));
+
+        let part = part_path(&target);
+        let outcome = fetch_and_verify(&*http, &resolved, &target, &part, &worker_cancel, &tx);
+        let event = match outcome {
+            Ok(()) => DownloadEvent::Done(target),
+            Err(problem) => {
+                if problem.discard_partial {
+                    let _ = std::fs::remove_file(&part);
+                }
+                DownloadEvent::Failed(problem.message)
+            }
+        };
+        let _ = tx.send(event);
+    });
+
+    DownloadHandle { cancel, rx }
+}
+
+/// A byte count a person can read.
+pub fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[0])
+    } else {
+        format!("{:.1} {}", value, UNITS[unit])
+    }
 }
 
 /// A failure, and whether the partial file is worth keeping.

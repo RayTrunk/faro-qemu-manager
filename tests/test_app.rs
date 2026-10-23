@@ -4,7 +4,7 @@
 mod common;
 
 use egui::Context;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use tempfile::tempdir;
 
@@ -1211,4 +1211,51 @@ fn test_a_failed_creation_leaves_the_wizard_standing_with_its_entries() {
         app.wizard.why_not_create().is_none(),
         "the entries are complete, so Create is still offered"
     );
+}
+
+// --------------------------------------------------------------------------
+// Part 3b, task 4: the two-click promise for someone with no ISO
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_creating_with_a_download_fills_the_iso_slot_right_away() {
+    // Spec section 11.5: the machine is created at once, with the target
+    // path as its ISO. The two-click promise has to hold for someone who
+    // does not have an image yet.
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(&dir.path().join("vms"));
+    let mut draft = VmTemplate::by_key("debian")
+        .unwrap()
+        .instantiate("Debian", Path::new(""));
+    draft.cdroms.push(PathBuf::from("placeholder.iso"));
+
+    let id = app.create_from_wizard(draft, 1).unwrap();
+
+    let vm = app.vms.iter().find(|v| v.id == id).unwrap();
+    assert_eq!(
+        vm.cdroms.len(),
+        1,
+        "the machine exists with an ISO slot already filled"
+    );
+}
+
+#[test]
+fn test_a_download_for_a_template_without_a_source_starts_nothing() {
+    // Windows has no stable link, so there is nothing to start and nothing
+    // to leave half-done.
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(&dir.path().join("vms"));
+    app.wizard.select("windows-11");
+    app.wizard.name = "Win 11".to_string();
+    app.wizard.request_download();
+
+    assert!(
+        faro_qem::download::source_for("windows-11").is_none(),
+        "no mirror we can check"
+    );
+    assert!(
+        faro_qem::download::official_page("windows-11").is_some(),
+        "but a page the user can open"
+    );
+    assert!(app.downloads.is_empty());
 }

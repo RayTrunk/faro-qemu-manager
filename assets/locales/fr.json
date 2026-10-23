@@ -174,5 +174,15 @@
   "console_placeholder_stopped": "{name} est arrêtée. Lancez-la pour démarrer l'émulation.",
   "copy": "Copier la commande",
   "duplicate_image_missing": "L'image {path} est absente et n'a donc pas été copiée. Les deux machines y pointent désormais ; celle qui la trouvera l'utilisera seule.",
-  "duplicate_folder_failed": "Aucun dossier n'a pu être créé pour la copie ({error}), {path} n'a donc pas été copiée. Les deux machines l'utilisent désormais ; les lancer ensemble la détruit."
+  "duplicate_folder_failed": "Aucun dossier n'a pu être créé pour la copie ({error}), {path} n'a donc pas été copiée. Les deux machines l'utilisent désormais ; les lancer ensemble la détruit.",
+  "download": "Télécharger",
+  "open_official_page": "Ouvrir la page officielle",
+  "download_limit_notice": "La somme de contrôle est récupérée en HTTPS depuis le fichier de sommes de l'éditeur. Elle prouve que le transfert n'a pas été altéré — pas que l'image est authentique. Qui contrôle le miroir contrôle les deux. La vérification de signature est hors périmètre.",
+  "download_running": "Téléchargement de {name} : {done} sur {total}",
+  "download_verifying": "Vérification de la somme de contrôle de {name}…",
+  "download_done": "{name} est téléchargée et vérifiée.",
+  "download_failed": "{name} n'a pas pu être téléchargée : {error}",
+  "pf_download_unfinished": "Le téléchargement de {path} n'est pas terminé. La machine démarrera dès que le fichier sera présent et vérifié.",
+  "download_resolving": "Recherche du nom de fichier actuel pour {name}…",
+  "open_page_failed": "La page n'a pas pu être ouverte : {error}"
 }

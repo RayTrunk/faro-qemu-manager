@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::config::{
@@ -12,6 +13,9 @@ use crate::config::{
     try_load_vms, AppSettings, ConfigLoadError, ConfigRecovery, Containment, CreationMode,
     Firmware, VmConfig,
 };
+use crate::download::{
+    human_bytes, source_for, start_resolving, DownloadEvent, DownloadHandle, UreqHttp,
+};
 use crate::i18n::I18n;
 use crate::preflight::{blocks, check_vm, Finding, HostFacts};
 use crate::qemu::{
@@ -19,6 +23,7 @@ use crate::qemu::{
     nvram_path_for, prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent,
     UefiFirmware, VmProcess,
 };
+use crate::templates::VmTemplate;
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
 use crate::ui::settings::SettingsDialog;
@@ -79,6 +84,13 @@ pub struct FaroQemApp {
     pub selected_folder_for: Option<Uuid>,
     /// What this host has, asked once. The start check compares against it.
     pub host: HostFacts,
+    /// Downloads in flight, one per machine. Dropping a handle closes its
+    /// channel; the worker notices and stops, so quitting does not wait for
+    /// a six-gigabyte transfer.
+    pub downloads: HashMap<Uuid, DownloadHandle>,
+    /// What to say about each running download, shown in the detail panel.
+    /// The console gets the technical lines; this is the one sentence.
+    pub download_status: HashMap<Uuid, String>,
 }
 
 /// Short, human-facing name for a configuration path.
@@ -283,6 +295,8 @@ impl FaroQemApp {
             delete_folder_for: None,
             selected_folder: None,
             selected_folder_for: None,
+            downloads: HashMap::new(),
+            download_status: HashMap::new(),
             host: HostFacts::probe(),
         }
     }
@@ -587,6 +601,169 @@ impl FaroQemApp {
                 self.push_notice(Notice::warning(text));
             }
         }
+    }
+
+    /// Start fetching the ISO for a machine that already exists.
+    ///
+    /// Spec section 11.5: the machine is created at once, with the target
+    /// path as its ISO, and the start check holds the start until the bytes
+    /// are there and verified. Resolving today's filename means talking to a
+    /// mirror, so that happens in the worker's own thread — a slow mirror
+    /// must not freeze the moment of creation.
+    fn begin_download(&mut self, id: Uuid, source_key: &str) {
+        let Some(source) = source_for(source_key) else {
+            return;
+        };
+        let Some(vm) = self.vms.iter().find(|v| v.id == id) else {
+            return;
+        };
+        let folder = find_vm_folders(&self.settings.vm_dir_or_default(), id)
+            .pop()
+            .unwrap_or_else(|| self.settings.vm_dir_or_default());
+        let name = vm.name.clone();
+
+        self.push_notice(Notice::info(
+            self.i18n.tf("download_resolving", &[("name", source.key)]),
+        ));
+
+        let handle = start_resolving(Arc::new(UreqHttp), source, folder);
+        self.downloads.insert(id, handle);
+        self.log(
+            id,
+            format!("[DOWNLOAD] {}: resolving for {}", source.key, name),
+        );
+    }
+
+    /// Read whatever the download workers have to say, without waiting.
+    ///
+    /// Called once per frame. `try_recv` in a loop rather than `recv`,
+    /// because a frame that waits on a mirror is a frozen interface — the
+    /// hard requirement in spec section 6.
+    fn process_download_events(&mut self) {
+        let ids: Vec<Uuid> = self.downloads.keys().copied().collect();
+        for id in ids {
+            let mut finished = false;
+            let mut messages: Vec<String> = Vec::new();
+            let mut arrived: Option<PathBuf> = None;
+            let mut failure: Option<String> = None;
+            let mut target: Option<PathBuf> = None;
+            let mut progress: Option<(String, String)> = None;
+            let mut verifying = false;
+
+            if let Some(handle) = self.downloads.get(&id) {
+                while let Ok(event) = handle.rx.try_recv() {
+                    match event {
+                        DownloadEvent::Target(path) => {
+                            // Spec section 11.5: the machine was created with
+                            // a placeholder, because the filename is only
+                            // known once a mirror has been asked. Now it is.
+                            // The start check sees the .part beside this and
+                            // holds the start until the bytes are verified.
+                            target = Some(path);
+                        }
+                        DownloadEvent::Progress { done, total } => {
+                            let total_text =
+                                total.map(human_bytes).unwrap_or_else(|| "?".to_string());
+                            messages.push(format!(
+                                "[DOWNLOAD] {} of {}",
+                                human_bytes(done),
+                                total_text
+                            ));
+                            progress = Some((human_bytes(done), total_text));
+                        }
+                        DownloadEvent::Verifying => {
+                            messages.push("[DOWNLOAD] verifying the checksum".to_string());
+                            verifying = true;
+                        }
+                        DownloadEvent::Done(path) => {
+                            arrived = Some(path);
+                            finished = true;
+                        }
+                        DownloadEvent::Failed(problem) => {
+                            failure = Some(problem);
+                            finished = true;
+                        }
+                    }
+                }
+            }
+
+            for message in messages {
+                self.log(id, message);
+            }
+
+            // The one sentence the detail panel shows. Verifying wins over
+            // progress: it is the later state, and a bar sitting at 100%
+            // while the digest is computed looks stuck.
+            let shown_name = self
+                .vms
+                .iter()
+                .find(|v| v.id == id)
+                .and_then(|v| v.cdroms.first())
+                .and_then(|iso| iso.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if verifying {
+                let text = self.i18n.tf("download_verifying", &[("name", &shown_name)]);
+                self.download_status.insert(id, text);
+            } else if let Some((done, total)) = progress {
+                let text = self.i18n.tf(
+                    "download_running",
+                    &[("name", &shown_name), ("done", &done), ("total", &total)],
+                );
+                self.download_status.insert(id, text);
+            }
+
+            if let Some(path) = target {
+                if let Some(vm) = self.vms.iter_mut().find(|v| v.id == id) {
+                    vm.cdroms.clear();
+                    vm.cdroms.push(path.clone());
+                }
+                self.save_vms_now();
+                self.log(id, format!("[DOWNLOAD] target: {}", path.display()));
+            }
+
+            if let Some(path) = arrived {
+                let file = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                // The machine was created with the target path already in its
+                // ISO slot, so nothing has to be rewritten here -- unless the
+                // resolved name turned out different from the placeholder.
+                if let Some(vm) = self.vms.iter_mut().find(|v| v.id == id) {
+                    if !vm.cdroms.iter().any(|iso| iso == &path) {
+                        vm.cdroms.clear();
+                        vm.cdroms.push(path.clone());
+                    }
+                }
+                self.save_vms_now();
+                let text = self.i18n.tf("download_done", &[("name", &file)]);
+                self.push_notice(Notice::info(text));
+                self.log(id, format!("[DOWNLOAD] done: {}", path.display()));
+            }
+            if let Some(problem) = failure {
+                let name = self
+                    .vms
+                    .iter()
+                    .find(|v| v.id == id)
+                    .map(|v| v.name.clone())
+                    .unwrap_or_default();
+                let text = self
+                    .i18n
+                    .tf("download_failed", &[("name", &name), ("error", &problem)]);
+                self.push_notice(Notice::error(text));
+                self.log(id, format!("[DOWNLOAD] failed: {}", problem));
+            }
+            if finished {
+                self.downloads.remove(&id);
+                self.download_status.remove(&id);
+            }
+        }
+    }
+
+    /// Put a line in a machine's console.
+    fn log(&mut self, id: Uuid, line: String) {
+        self.console_logs.entry(id).or_default().push_system(line);
     }
 
     /// Everything worth saying about this machine before it starts.
@@ -923,6 +1100,9 @@ impl FaroQemApp {
     pub fn render_ui(&mut self, ctx: &egui::Context) {
         // 1. Process asynchronous QEMU events
         self.process_qemu_events(Some(ctx));
+        // Emptied without waiting: a frame that blocks on a mirror is the
+        // frozen interface spec section 6 forbids.
+        self.process_download_events();
 
         let mut menu_sidebar_action: Option<SidebarAction> = None;
         let mut menu_detail_action: Option<VmDetailAction> = None;
@@ -1126,6 +1306,9 @@ impl FaroQemApp {
                 .and_then(|id| find_vm_folders(&self.settings.vm_dir_or_default(), id).pop());
         }
         let selected_folder = self.selected_folder.clone();
+        let download_status = self
+            .selected_vm_id
+            .and_then(|id| self.download_status.get(&id).cloned());
 
         let mut detail_action = None;
         let mut empty_state_create = false;
@@ -1153,6 +1336,7 @@ impl FaroQemApp {
                         &mut self.create_disk_modal,
                     )
                     .with_vm_folder(selected_folder.as_deref())
+                    .with_download_status(download_status.as_deref())
                     .with_console(console_buf)
                     .with_logo(self.logo_texture.as_ref())
                     .with_capabilities(&self.capabilities)
@@ -1205,8 +1389,21 @@ impl FaroQemApp {
             match action {
                 Some(WizardAction::Create { vm, disk_gb }) => {
                     let name = vm.name.clone();
+                    let wanted_download = self.wizard.download_requested;
+                    let source = vm
+                        .template
+                        .as_deref()
+                        .and_then(VmTemplate::by_key)
+                        .and_then(|t| t.iso_source);
                     match self.create_from_wizard(vm, disk_gb) {
-                        Ok(_) => self.wizard.created(),
+                        Ok(id) => {
+                            if wanted_download {
+                                if let Some(key) = source {
+                                    self.begin_download(id, key);
+                                }
+                            }
+                            self.wizard.created()
+                        }
                         Err(e) => {
                             // Nothing was added to the list. The dialog comes
                             // back with the template, the name and the ISO

@@ -353,3 +353,69 @@ fn test_a_port_forward_added_in_the_wizard_reaches_the_machine() {
         "the rule travels with it"
     );
 }
+
+// --------------------------------------------------------------------------
+// Part 3b, task 4: downloading at the ISO field
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_the_download_button_appears_only_where_there_is_a_stable_link() {
+    let i18n = I18n::new("en");
+    for key in ["debian", "ubuntu", "arch", "alpine"] {
+        let mut state = opened();
+        state.select(key);
+        assert!(
+            render_wizard(&mut state).contains(i18n.t("download")),
+            "{} has a stable, documented, checkable address",
+            key
+        );
+    }
+    for key in ["windows-11", "windows-10"] {
+        let mut state = opened();
+        state.select(key);
+        let drawn = render_wizard(&mut state);
+        assert!(
+            !drawn.contains(i18n.t("download")),
+            "{} has no stable link: Microsoft hands out session-bound ones",
+            key
+        );
+        assert!(
+            drawn.contains(i18n.t("open_official_page")),
+            "{} drew:
+{}",
+            key,
+            drawn
+        );
+    }
+}
+
+#[test]
+fn test_the_wizard_states_what_a_checksum_proves_and_what_it_does_not() {
+    // Spec section 6: the limit must be in the interface, not only in the
+    // design document.
+    let i18n = I18n::new("en");
+    let mut state = opened();
+    state.select("debian");
+    assert!(render_wizard(&mut state).contains(i18n.t("download_limit_notice")));
+}
+
+#[test]
+fn test_asking_for_a_download_is_remembered_until_the_machine_is_made() {
+    let mut state = opened();
+    state.select("debian");
+    state.name = "Debian".to_string();
+    assert!(!state.download_requested, "nobody asked yet");
+    state.request_download();
+    assert!(state.download_requested);
+
+    // The request survives handing out the draft, because the caller starts
+    // the download only after the machine exists.
+    let _ = state.take_draft().expect("there is a draft");
+    assert!(state.download_requested);
+
+    state.created();
+    assert!(
+        !state.download_requested,
+        "and is cleared for the next time"
+    );
+}

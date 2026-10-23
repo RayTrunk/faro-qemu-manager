@@ -174,5 +174,15 @@
   "console_placeholder_stopped": "{name} ist angehalten. Starten Sie die Maschine, um die Emulation zu beginnen.",
   "copy": "Befehl kopieren",
   "duplicate_image_missing": "Das Abbild {path} ist nicht da und wurde deshalb nicht kopiert. Beide Maschinen zeigen jetzt darauf; wer es zuerst findet, benutzt es allein.",
-  "duplicate_folder_failed": "Für die Kopie ließ sich kein Ordner anlegen ({error}), deshalb wurde {path} nicht kopiert. Beide Maschinen benutzen es jetzt; wer beide zugleich startet, zerstört es."
+  "duplicate_folder_failed": "Für die Kopie ließ sich kein Ordner anlegen ({error}), deshalb wurde {path} nicht kopiert. Beide Maschinen benutzen es jetzt; wer beide zugleich startet, zerstört es.",
+  "download": "Herunterladen",
+  "open_official_page": "Offizielle Seite öffnen",
+  "download_limit_notice": "Die Prüfsumme wird über HTTPS aus der Prüfsummendatei des Herausgebers geholt. Sie belegt, dass die Übertragung unverfälscht war — nicht, dass das Abbild echt ist. Wer den Spiegel kontrolliert, kontrolliert beides. Signaturprüfung gehört nicht zum Umfang.",
+  "download_running": "{name} wird geladen: {done} von {total}",
+  "download_verifying": "Prüfsumme von {name} wird geprüft…",
+  "download_done": "{name} ist geladen und geprüft.",
+  "download_failed": "{name} konnte nicht geladen werden: {error}",
+  "pf_download_unfinished": "Der Download von {path} ist nicht fertig. Die Maschine startet, sobald die Datei da und geprüft ist.",
+  "download_resolving": "Der aktuelle Dateiname für {name} wird ermittelt…",
+  "open_page_failed": "Die Seite konnte nicht geöffnet werden: {error}"
 }
