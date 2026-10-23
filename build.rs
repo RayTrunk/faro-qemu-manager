@@ -10,7 +10,10 @@ fn main() {
     res.set("CompanyName", "R.Trunk");
     res.set("OriginalFilename", "faro-qem.exe");
     res.set("InternalName", "faro-qem");
-    res.set("Comments", "FARO QEMU MANAGER - Modern QEMU Virtual Machine Manager");
+    res.set(
+        "Comments",
+        "FARO QEMU MANAGER - Modern QEMU Virtual Machine Manager",
+    );
 
     if let Err(e) = res.compile() {
         eprintln!("Warning: Failed to compile Windows resource: {}", e);

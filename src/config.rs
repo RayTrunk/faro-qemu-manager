@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
 
 /// Supported CPU architectures for QEMU emulation
@@ -422,7 +423,30 @@ pub fn save_settings(path: &Path, settings: &AppSettings) -> Result<(), String> 
     write_config_file(path, json.as_bytes())
 }
 
+/// Build a unique staging path next to `path`, used for an atomic write.
+///
+/// The staging file must live in the same directory as the target so that the
+/// final rename stays on one volume.
+fn temp_sibling_path(path: &Path) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".tmp-{}-{}", std::process::id(), seq));
+
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+        _ => PathBuf::from(name),
+    }
+}
+
 /// Write data to a target path, creating parent directories if needed.
+///
+/// The payload goes to a staging file first and is then renamed over the
+/// target, so a concurrent reader always sees either the previous file or the
+/// complete new one — never a truncated one. Writing straight to the target
+/// would empty it before refilling it, and a crash or a reader in that window
+/// would find a torn configuration.
 fn write_config_file(path: &Path, data: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -430,5 +454,18 @@ fn write_config_file(path: &Path, data: &[u8]) -> Result<(), String> {
                 .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
         }
     }
-    std::fs::write(path, data).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
+
+    let staging = temp_sibling_path(path);
+    std::fs::write(&staging, data)
+        .map_err(|e| format!("Failed to write {}: {}", staging.display(), e))?;
+
+    std::fs::rename(&staging, path).map_err(|e| {
+        let _ = std::fs::remove_file(&staging);
+        format!(
+            "Failed to move {} onto {}: {}",
+            staging.display(),
+            path.display(),
+            e
+        )
+    })
 }
