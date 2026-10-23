@@ -9,7 +9,13 @@ use faro_qem::config::{
     Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, PortForwardRule, VmConfig,
 };
 use faro_qem::i18n::I18n;
-use faro_qem::ui::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
+use faro_qem::qemu::QemuCapabilities;
+use faro_qem::ui::{
+    offered_accelerators, offered_machine_types, offered_netdev_backends, CreateDiskState,
+    DetailTab, VmDetailAction, VmDetailView,
+};
+
+mod common;
 
 #[test]
 fn test_vm_detail_action_variants_and_helpers() {
@@ -360,4 +366,121 @@ fn test_vm_detail_i18n_locales() {
             });
         });
     }
+}
+
+// --------------------------------------------------------------------------
+// Part 2: only offer what the installed QEMU actually has
+// --------------------------------------------------------------------------
+//
+// These assert on the offered lists directly, not on what a frame drew. A
+// closed ComboBox paints only its selected value, so "bridge is not on screen"
+// would hold even if bridge were on offer — a test without teeth.
+
+#[test]
+fn test_bridge_is_dropped_when_qemu_lacks_it() {
+    let without = QemuCapabilities {
+        netdev_backends: vec!["user".into(), "tap".into()],
+        ..Default::default()
+    };
+    let offered = offered_netdev_backends(Some(&without));
+    assert!(!offered.contains(&"bridge"), "offered: {:?}", offered);
+    assert!(offered.contains(&"user"));
+    assert!(
+        offered.contains(&"none"),
+        "none is ours, not QEMU's, and always available"
+    );
+}
+
+#[test]
+fn test_bridge_is_offered_when_qemu_has_it() {
+    let with = QemuCapabilities {
+        netdev_backends: vec!["user".into(), "tap".into(), "bridge".into()],
+        ..Default::default()
+    };
+    assert!(offered_netdev_backends(Some(&with)).contains(&"bridge"));
+}
+
+#[test]
+fn test_without_a_probe_every_backend_stays_on_offer() {
+    let offered = offered_netdev_backends(None);
+    for expected in ["user", "tap", "bridge", "none"] {
+        assert!(
+            offered.contains(&expected),
+            "not knowing must not look like unavailable: {:?}",
+            offered
+        );
+    }
+}
+
+#[test]
+fn test_no_machine_type_is_suggested_that_qemu_rejects() {
+    let caps = QemuCapabilities {
+        machines: vec!["q35".into(), "pc-i440fx-9.2".into(), "microvm".into()],
+        ..Default::default()
+    };
+    let offered = offered_machine_types(Arch::X86_64, Some(&caps));
+    assert!(offered.contains(&"q35"));
+    assert!(
+        !offered.contains(&"pc-i440fx"),
+        "the bare i440fx name is rejected by QEMU: {:?}",
+        offered
+    );
+}
+
+#[test]
+fn test_a_machine_this_qemu_lacks_is_not_suggested() {
+    let caps = QemuCapabilities {
+        machines: vec!["q35".into()],
+        ..Default::default()
+    };
+    let offered = offered_machine_types(Arch::X86_64, Some(&caps));
+    assert_eq!(offered, vec!["q35"], "microvm is absent here");
+}
+
+#[test]
+fn test_haxm_is_not_offered_on_windows() {
+    let offered = offered_accelerators();
+    assert!(offered.contains(&Accelerator::TCG));
+
+    #[cfg(target_os = "windows")]
+    assert!(
+        !offered.contains(&Accelerator::HAXM),
+        "HAXM used to be bent silently onto WHPX: {:?}",
+        offered
+    );
+    #[cfg(not(target_os = "windows"))]
+    assert!(offered.contains(&Accelerator::HAXM));
+}
+
+#[test]
+fn test_system_tab_renders_the_firmware_selector() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                .with_capabilities(&caps)
+                .show(ui);
+        });
+    });
+    let output = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                .with_capabilities(&caps)
+                .show(ui);
+        });
+    });
+
+    let drawn = common::rendered_text(&output);
+    assert!(
+        drawn.contains(i18n.t("firmware_bios")) && drawn.contains(i18n.t("firmware_uefi")),
+        "both firmware kinds must be choosable, drew:
+{}",
+        drawn
+    );
 }

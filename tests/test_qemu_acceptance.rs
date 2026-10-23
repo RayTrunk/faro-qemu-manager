@@ -3,6 +3,14 @@
 
 mod common;
 
+/// Memory for a probe machine.
+///
+/// The probes run in parallel and each holds its allocation for two seconds,
+/// so the default 2048 MB exhausts the host and QEMU answers "cannot set up
+/// guest memory" — a resource failure that reads exactly like a rejection.
+/// Acceptance is about the arguments, not the sizing.
+const PROBE_MEMORY_MB: u32 = 128;
+
 use common::{qemu_accepts, Acceptance};
 use faro_qem::config::{Arch, DriveConfig, DriveFormat, DriveInterface, Firmware, VmConfig};
 use faro_qem::qemu::{build_qemu_args, find_uefi_firmware, prepare_nvram};
@@ -43,6 +51,7 @@ fn test_qemu_accepts_every_drive_interface() {
         common::make_empty_qcow2(&disk);
 
         let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+        vm.memory_mb = PROBE_MEMORY_MB;
         vm.drives.push(DriveConfig {
             path: disk,
             format: DriveFormat::Qcow2,
@@ -65,6 +74,7 @@ fn test_qemu_accepts_two_isos_alongside_a_disk() {
     std::fs::write(&b, b"").unwrap();
 
     let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    vm.memory_mb = PROBE_MEMORY_MB;
     vm.drives.push(DriveConfig {
         path: disk,
         format: DriveFormat::Qcow2,
@@ -82,6 +92,7 @@ fn test_qemu_accepts_user_networking_with_two_port_forwards() {
     use faro_qem::config::PortForwardRule;
 
     let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    vm.memory_mb = PROBE_MEMORY_MB;
     for (host, guest) in [(2222u16, 22u16), (8080, 80)] {
         vm.network.port_forwards.push(PortForwardRule {
             host_port: host,
@@ -134,6 +145,7 @@ fn test_qemu_accepts_a_uefi_machine() {
     prepare_nvram(&uefi.vars_template, &nvram).unwrap();
 
     let mut vm = VmConfig::new_default("win11-probe", Arch::X86_64);
+    vm.memory_mb = PROBE_MEMORY_MB;
     vm.firmware = Firmware::Uefi { nvram };
     vm.drives.push(DriveConfig {
         path: disk,

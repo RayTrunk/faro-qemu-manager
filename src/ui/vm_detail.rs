@@ -6,15 +6,59 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::config::{
-    Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, PortForwardRule, VmConfig,
+    Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, Firmware, PortForwardRule,
+    VmConfig,
 };
 use crate::i18n::I18n;
-use crate::qemu::{create_disk_image, find_qemu_img};
+use crate::qemu::{create_disk_image, find_qemu_img, find_uefi_firmware, QemuCapabilities};
 use crate::ui::console::{ConsoleLogBuffer, ConsoleView};
 use crate::ui::theme::{
     card_frame, danger_button, icons, section_header, status_badge, COLOR_ERROR, COLOR_PRIMARY,
     COLOR_RUNNING, COLOR_STOPPED, ROUNDING_BUTTON,
 };
+
+/// Network backends worth offering for these capabilities.
+///
+/// `None` means QEMU was never asked, and then everything stays on offer:
+/// hiding an option because we failed to ask would claim it is unavailable
+/// when we do not know. `none` is ours rather than QEMU's, so it is always in.
+pub fn offered_netdev_backends(caps: Option<&QemuCapabilities>) -> Vec<&'static str> {
+    ["user", "tap", "bridge"]
+        .into_iter()
+        .filter(|b| caps.is_none_or(|c| c.has_netdev(b)))
+        .chain(std::iter::once("none"))
+        .collect()
+}
+
+/// Machine types worth suggesting for this architecture.
+///
+/// The old fixed list offered `pc-i440fx`, which QEMU rejects outright — only
+/// versioned names exist. Anything a probe does not confirm is dropped.
+pub fn offered_machine_types(arch: Arch, caps: Option<&QemuCapabilities>) -> Vec<&'static str> {
+    let candidates: &[&'static str] = match arch {
+        Arch::X86_64 | Arch::I386 => &["q35", "microvm"],
+        Arch::Aarch64 | Arch::Arm => &["virt"],
+        Arch::Riscv64 => &["virt", "sifive_u"],
+    };
+    candidates
+        .iter()
+        .copied()
+        .filter(|m| caps.is_none_or(|c| c.has_machine(m)))
+        .collect()
+}
+
+/// Accelerators worth offering on this platform.
+///
+/// HAXM is absent from modern Windows QEMU builds and used to be bent silently
+/// onto WHPX. An option that does something other than it says is worse than
+/// no option at all.
+pub fn offered_accelerators() -> Vec<Accelerator> {
+    Accelerator::all()
+        .iter()
+        .copied()
+        .filter(|a| !(cfg!(target_os = "windows") && *a == Accelerator::HAXM))
+        .collect()
+}
 
 /// Actions emitted by the VM detail view toolbar and tabs
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +155,8 @@ pub struct VmDetailView<'a> {
     pub pid: Option<u32>,
     pub cli_command: Option<&'a str>,
     pub logo: Option<&'a egui::TextureHandle>,
+    /// What the installed QEMU can do. `None` means nobody asked.
+    pub capabilities: Option<&'a QemuCapabilities>,
 }
 
 impl<'a> VmDetailView<'a> {
@@ -134,7 +180,14 @@ impl<'a> VmDetailView<'a> {
             pid: None,
             cli_command: None,
             logo: None,
+            capabilities: None,
         }
+    }
+
+    /// Attach what the installed QEMU can do, so the view offers only that.
+    pub fn with_capabilities(mut self, caps: &'a QemuCapabilities) -> Self {
+        self.capabilities = Some(caps);
+        self
     }
 
     /// Attach logo texture to detail view header
@@ -504,14 +557,10 @@ impl<'a> VmDetailView<'a> {
                                 .hint_text(self.vm.arch.default_machine())
                                 .desired_width(140.0),
                         );
-                        let suggestions: &[&str] = match self.vm.arch {
-                            Arch::X86_64 | Arch::I386 => &["q35", "pc-i440fx", "microvm"],
-                            Arch::Aarch64 | Arch::Arm => &["virt"],
-                            Arch::Riscv64 => &["virt", "sifive_u"],
-                        };
-                        for &s in suggestions {
-                            if ui.small_button(s).clicked() {
-                                self.vm.machine_type = s.to_string();
+                        let suggestions = offered_machine_types(self.vm.arch, self.capabilities);
+                        for machine in suggestions {
+                            if ui.small_button(machine).clicked() {
+                                self.vm.machine_type = machine.to_string();
                             }
                         }
                     });
@@ -523,10 +572,10 @@ impl<'a> VmDetailView<'a> {
                         egui::ComboBox::from_id_salt("detail_accel_combo")
                             .selected_text(self.vm.accel.as_str().to_uppercase())
                             .show_ui(ui, |ui| {
-                                for acc in Accelerator::all() {
+                                for acc in offered_accelerators() {
                                     ui.selectable_value(
                                         &mut self.vm.accel,
-                                        *acc,
+                                        acc,
                                         acc.as_str().to_uppercase(),
                                     );
                                 }
@@ -625,58 +674,98 @@ impl<'a> VmDetailView<'a> {
                     });
                     ui.end_row();
 
-                    // 7. UEFI / OVMF Firmware Path
-                    ui.label(egui::RichText::new(self.i18n.t("uefi")).strong());
-                    ui.horizontal(|ui| {
-                        let mut path_str = self
-                            .vm
-                            .bios_uefi
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_default();
+                    // 7. Firmware
+                    ui.label(egui::RichText::new(self.i18n.t("firmware")).strong());
+                    ui.vertical(|ui| {
+                        let is_uefi = matches!(self.vm.firmware, Firmware::Uefi { .. });
 
-                        let has_path = self.vm.bios_uefi.is_some();
-                        let clear_btn_width = if has_path { 24.0 } else { 0.0 };
-                        let desired_width =
-                            (ui.available_width() - 110.0 - clear_btn_width).max(120.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .selectable_label(!is_uefi, self.i18n.t("firmware_bios"))
+                                .clicked()
+                                && is_uefi
+                            {
+                                self.vm.firmware = Firmware::Bios { rom: None };
+                            }
+                            if ui
+                                .selectable_label(is_uefi, self.i18n.t("firmware_uefi"))
+                                .clicked()
+                                && !is_uefi
+                            {
+                                // The variable store lives beside the VM's first
+                                // disk, so it travels with the machine.
+                                let nvram = self
+                                    .vm
+                                    .drives
+                                    .first()
+                                    .and_then(|d| d.path.parent().map(|p| p.to_path_buf()))
+                                    .unwrap_or_default()
+                                    .join(format!("{}-nvram.fd", self.vm.id));
+                                self.vm.firmware = Firmware::Uefi { nvram };
+                            }
+                        });
 
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(&mut path_str)
-                                .hint_text("None / Default BIOS (Optional OVMF.fd)")
-                                .desired_width(desired_width),
-                        );
-                        if resp.changed() {
-                            let trimmed = path_str.trim();
-                            self.vm.bios_uefi = if trimmed.is_empty() {
-                                None
-                            } else {
-                                Some(PathBuf::from(trimmed))
-                            };
-                        }
-
-                        if ui
-                            .button(format!("{} {}", icons::FOLDER, self.i18n.t("browse")))
-                            .clicked()
-                        {
-                            let mut dialog = rfd::FileDialog::new()
-                                .add_filter("Firmware Images", &["fd", "bin", "rom", "raw"]);
-                            if let Some(ref cur) = self.vm.bios_uefi {
-                                if let Some(parent) = cur.parent() {
-                                    dialog = dialog.set_directory(parent);
+                        match &mut self.vm.firmware {
+                            Firmware::Bios { rom } => {
+                                ui.horizontal(|ui| {
+                                    let mut path_str = rom
+                                        .as_ref()
+                                        .map(|p| p.to_string_lossy().to_string())
+                                        .unwrap_or_default();
+                                    let resp = ui.add(
+                                        egui::TextEdit::singleline(&mut path_str)
+                                            .hint_text(self.i18n.t("firmware_rom"))
+                                            .desired_width(220.0),
+                                    );
+                                    if resp.changed() {
+                                        let trimmed = path_str.trim();
+                                        *rom = if trimmed.is_empty() {
+                                            None
+                                        } else {
+                                            Some(PathBuf::from(trimmed))
+                                        };
+                                    }
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            icons::FOLDER,
+                                            self.i18n.t("browse")
+                                        ))
+                                        .clicked()
+                                    {
+                                        if let Some(file) = rfd::FileDialog::new()
+                                            .add_filter("Firmware Images", &["fd", "bin", "rom"])
+                                            .pick_file()
+                                        {
+                                            *rom = Some(file);
+                                        }
+                                    }
+                                });
+                            }
+                            Firmware::Uefi { nvram } => {
+                                ui.label(
+                                    egui::RichText::new(self.i18n.t("firmware_uefi_hint"))
+                                        .size(11.0)
+                                        .color(ui.visuals().weak_text_color()),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}: {}",
+                                        self.i18n.t("firmware_nvram"),
+                                        nvram.display()
+                                    ))
+                                    .size(11.0)
+                                    .monospace()
+                                    .color(ui.visuals().weak_text_color()),
+                                );
+                                if find_uefi_firmware(None).is_none() {
+                                    ui.label(
+                                        egui::RichText::new(self.i18n.t("firmware_missing"))
+                                            .size(11.0)
+                                            .color(COLOR_ERROR),
+                                    );
                                 }
                             }
-                            if let Some(file) = dialog.pick_file() {
-                                self.vm.bios_uefi = Some(file);
-                            }
-                        }
-
-                        if has_path
-                            && ui
-                                .small_button(icons::CLOSE)
-                                .on_hover_text(self.i18n.t("clear"))
-                                .clicked()
-                        {
-                            self.vm.bios_uefi = None;
                         }
                     });
                     ui.end_row();
@@ -973,7 +1062,8 @@ impl<'a> VmDetailView<'a> {
                     // Backend
                     ui.label(egui::RichText::new(self.i18n.t("backend")).strong());
                     ui.horizontal(|ui| {
-                        let net_backends = ["user", "tap", "bridge", "none"];
+                        // "none" is ours, not QEMU's, so it is always on offer.
+                        let net_backends = offered_netdev_backends(self.capabilities);
                         egui::ComboBox::from_id_salt("detail_net_backend_combo")
                             .selected_text(&self.vm.network.backend)
                             .show_ui(ui, |ui| {

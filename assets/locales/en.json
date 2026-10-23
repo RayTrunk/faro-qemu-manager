@@ -87,5 +87,14 @@
   "config_corrupt_not_quarantined": "Could not read {file}, and it could not be moved aside either ({detail}). The file was left untouched.",
   "config_save_failed": "Could not save {file}: {detail}",
   "config_unreadable_left_alone": "Could not read {file} ({detail}). It was left exactly as it is, and nothing will be written to it this session. Close whatever is using it and start again.",
-  "config_write_blocked": "Did not save {file}: it still holds a configuration that could not be read, and writing over it would destroy that."
+  "config_write_blocked": "Did not save {file}: it still holds a configuration that could not be read, and writing over it would destroy that.",
+  "firmware": "Firmware",
+  "firmware_bios": "BIOS (legacy)",
+  "firmware_uefi": "UEFI",
+  "firmware_rom": "BIOS ROM (optional)",
+  "firmware_nvram": "Variable store (per VM)",
+  "firmware_missing": "No UEFI firmware found next to QEMU. This VM cannot start until it is available.",
+  "firmware_uefi_hint": "Required by Windows 11. Each VM keeps its own variable store so its boot entries survive.",
+  "option_unverified": "unverified — QEMU was not asked",
+  "forwards_backend_only": "Port forwarding works with user-mode networking only. These rules are kept but not applied."
 }

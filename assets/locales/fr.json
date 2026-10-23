@@ -87,5 +87,14 @@
   "config_corrupt_not_quarantined": "Impossible de lire {file}, et impossible de le mettre de côté ({detail}). Le fichier est resté intact.",
   "config_save_failed": "Impossible d'enregistrer {file} : {detail}",
   "config_unreadable_left_alone": "Impossible de lire {file} ({detail}). Le fichier a été laissé tel quel et rien n'y sera écrit durant cette session. Fermez ce qui l'utilise puis redémarrez.",
-  "config_write_blocked": "{file} n'a pas été enregistré : il contient encore une configuration illisible, et l'écraser la détruirait."
+  "config_write_blocked": "{file} n'a pas été enregistré : il contient encore une configuration illisible, et l'écraser la détruirait.",
+  "firmware": "Micrologiciel",
+  "firmware_bios": "BIOS (classique)",
+  "firmware_uefi": "UEFI",
+  "firmware_rom": "ROM BIOS (facultatif)",
+  "firmware_nvram": "Stockage de variables (par VM)",
+  "firmware_missing": "Aucun micrologiciel UEFI trouvé auprès de QEMU. Cette VM ne peut pas démarrer tant qu'il manque.",
+  "firmware_uefi_hint": "Exigé par Windows 11. Chaque VM conserve son propre stockage de variables afin de préserver ses entrées de démarrage.",
+  "option_unverified": "non vérifié — QEMU n'a pas été interrogé",
+  "forwards_backend_only": "La redirection de ports ne fonctionne qu'avec le réseau en mode utilisateur. Ces règles sont conservées mais non appliquées."
 }

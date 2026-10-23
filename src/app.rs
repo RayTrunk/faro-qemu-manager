@@ -13,7 +13,8 @@ use crate::config::{
 };
 use crate::i18n::I18n;
 use crate::qemu::{
-    build_qemu_args, find_qemu_binary, find_qemu_img, spawn_qemu, QemuEvent, VmProcess,
+    build_qemu_args, find_qemu_binary, find_qemu_img, probe_capabilities, spawn_qemu,
+    QemuCapabilities, QemuEvent, VmProcess,
 };
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
@@ -48,6 +49,10 @@ pub struct FaroQemApp {
     pub vms_write_blocked: bool,
     /// Same barrier for the settings file.
     pub settings_write_blocked: bool,
+    /// What the installed QEMU can do. Probed when the directory is chosen or
+    /// changed and then kept — four processes is not something to spawn while
+    /// drawing a frame.
+    pub capabilities: QemuCapabilities,
 }
 
 /// Short, human-facing name for a configuration path.
@@ -199,6 +204,10 @@ impl FaroQemApp {
 
         let selected_vm_id = vms.first().map(|v| v.id);
 
+        let capabilities = find_qemu_binary(settings.qemu_dir.as_deref(), settings.default_arch)
+            .map(|bin| probe_capabilities(&bin))
+            .unwrap_or_default();
+
         let logo_texture = ctx.and_then(|c| {
             crate::ui::theme::load_app_logo()
                 .map(|img| c.load_texture("faro_logo", img, egui::TextureOptions::LINEAR))
@@ -230,7 +239,18 @@ impl FaroQemApp {
             notices,
             vms_write_blocked,
             settings_write_blocked,
+            capabilities,
         }
+    }
+
+    /// Re-ask QEMU what it can do, after the directory or architecture changed.
+    fn refresh_capabilities(&mut self) {
+        self.capabilities = find_qemu_binary(
+            self.settings.qemu_dir.as_deref(),
+            self.settings.default_arch,
+        )
+        .map(|bin| probe_capabilities(&bin))
+        .unwrap_or_default();
     }
 
     /// Add a notice, unless the very same message is already on screen.
@@ -711,7 +731,8 @@ impl FaroQemApp {
                         &mut self.create_disk_modal,
                     )
                     .with_console(console_buf)
-                    .with_logo(self.logo_texture.as_ref());
+                    .with_logo(self.logo_texture.as_ref())
+                    .with_capabilities(&self.capabilities);
 
                     if let Some(p) = pid {
                         view = view.with_pid(p);
@@ -742,6 +763,7 @@ impl FaroQemApp {
             let mut dialog =
                 SettingsDialog::new(&mut self.settings_open, &mut self.settings, &mut self.i18n);
             if dialog.show(ctx) {
+                self.refresh_capabilities();
                 self.save_settings_now();
                 apply_theme(ctx, &self.settings.theme);
                 self.i18n.set_locale(&self.settings.language);
