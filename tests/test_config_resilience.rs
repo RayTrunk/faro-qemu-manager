@@ -1,7 +1,10 @@
 // FARO QEMU MANAGER (C) R.Trunk 2026
 // Resilience of configuration persistence: atomic writes, corrupt files, quarantine
 
-use faro_qem::config::{save_settings, save_vms, AppSettings, Arch, VmConfig};
+use faro_qem::config::{
+    save_settings, save_vms, try_load_settings, try_load_vms, AppSettings, Arch, ConfigLoadError,
+    VmConfig,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -81,4 +84,87 @@ fn test_save_creates_missing_parent_directories() {
     save_settings(&path, &AppSettings::default()).expect("save into fresh tree");
 
     assert!(path.is_file());
+}
+
+#[test]
+fn test_try_load_vms_reports_missing_file() {
+    let dir = tempdir().unwrap();
+    let err = try_load_vms(&dir.path().join("nope.json")).unwrap_err();
+    assert!(matches!(err, ConfigLoadError::Missing));
+}
+
+#[test]
+fn test_try_load_vms_reads_valid_file() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vms.json");
+    save_vms(&path, &[VmConfig::new_default("A", Arch::X86_64)]).unwrap();
+
+    let loaded = try_load_vms(&path).expect("valid file loads");
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].name, "A");
+}
+
+#[test]
+fn test_try_load_vms_reports_truncated_file_as_corrupt() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vms.json");
+    std::fs::write(&path, r#"[{"name":"KEEP ME","arch":"x86_64"},{"#).unwrap();
+
+    let err = try_load_vms(&path).unwrap_err();
+    assert!(matches!(err, ConfigLoadError::Corrupt { .. }));
+}
+
+// Review Focus 1
+#[test]
+fn test_try_load_vms_reports_wrong_shape_as_corrupt() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vms.json");
+    std::fs::write(&path, r#"{"vms": []}"#).unwrap();
+
+    let err = try_load_vms(&path).unwrap_err();
+    assert!(matches!(err, ConfigLoadError::Corrupt { .. }));
+}
+
+// Review Focus 2
+#[test]
+fn test_try_load_vms_treats_empty_file_as_missing() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vms.json");
+    std::fs::write(&path, "").unwrap();
+
+    let err = try_load_vms(&path).unwrap_err();
+    assert!(
+        matches!(err, ConfigLoadError::Missing),
+        "a zero-byte file is an aborted write, not a corrupt config"
+    );
+}
+
+#[test]
+fn test_try_load_settings_distinguishes_missing_from_corrupt() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    assert!(matches!(
+        try_load_settings(&path).unwrap_err(),
+        ConfigLoadError::Missing
+    ));
+
+    std::fs::write(&path, "{not json").unwrap();
+    assert!(matches!(
+        try_load_settings(&path).unwrap_err(),
+        ConfigLoadError::Corrupt { .. }
+    ));
+}
+
+#[test]
+fn test_lenient_loaders_keep_their_old_behaviour() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vms.json");
+    std::fs::write(&path, "{broken").unwrap();
+
+    assert!(faro_qem::config::load_vms(&path).is_empty());
+    assert_eq!(
+        faro_qem::config::load_settings(&path).language,
+        "en",
+        "lenient loader still falls back to defaults"
+    );
 }

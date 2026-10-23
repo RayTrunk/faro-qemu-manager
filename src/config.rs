@@ -387,15 +387,67 @@ pub fn default_settings_path() -> PathBuf {
     default_config_dir().join("settings.json")
 }
 
-/// Load the list of VMs from a JSON file. Returns empty list if missing or corrupted.
-pub fn load_vms(path: &Path) -> Vec<VmConfig> {
+/// Why a configuration file could not be loaded.
+///
+/// The distinction matters: `Missing` is a normal first start and may be
+/// answered with defaults, while `Unreadable` and `Corrupt` mean a file exists
+/// that the user cares about. Replacing one of those destroys their work.
+#[derive(Debug)]
+pub enum ConfigLoadError {
+    /// Nothing to load: no such file, or a file with no content at all. A
+    /// zero-byte file is an aborted write, not a configuration.
+    Missing,
+    /// The file exists but could not be read.
+    Unreadable(std::io::Error),
+    /// The file was read but does not parse as this configuration.
+    Corrupt { detail: String },
+}
+
+impl fmt::Display for ConfigLoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigLoadError::Missing => write!(f, "no configuration file present"),
+            ConfigLoadError::Unreadable(e) => write!(f, "{}", e),
+            ConfigLoadError::Corrupt { detail } => write!(f, "{}", detail),
+        }
+    }
+}
+
+/// Read a configuration file into a string, separating absence from read errors.
+fn read_config_text(path: &Path) -> Result<String, ConfigLoadError> {
     if !path.exists() {
-        return Vec::new();
+        return Err(ConfigLoadError::Missing);
     }
-    match std::fs::read_to_string(path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => Vec::new(),
+    let content = std::fs::read_to_string(path).map_err(ConfigLoadError::Unreadable)?;
+    if content.trim().is_empty() {
+        return Err(ConfigLoadError::Missing);
     }
+    Ok(content)
+}
+
+/// Load the list of VMs, reporting why it could not be loaded.
+pub fn try_load_vms(path: &Path) -> Result<Vec<VmConfig>, ConfigLoadError> {
+    let content = read_config_text(path)?;
+    serde_json::from_str(&content).map_err(|e| ConfigLoadError::Corrupt {
+        detail: e.to_string(),
+    })
+}
+
+/// Load application settings, reporting why they could not be loaded.
+pub fn try_load_settings(path: &Path) -> Result<AppSettings, ConfigLoadError> {
+    let content = read_config_text(path)?;
+    serde_json::from_str(&content).map_err(|e| ConfigLoadError::Corrupt {
+        detail: e.to_string(),
+    })
+}
+
+/// Load the list of VMs from a JSON file. Returns an empty list if missing or corrupted.
+///
+/// Lenient: it cannot tell a first start from a damaged file, so a caller that
+/// writes on "empty" will overwrite a damaged one. New code should use
+/// [`try_load_vms`] and preserve what it cannot read.
+pub fn load_vms(path: &Path) -> Vec<VmConfig> {
+    try_load_vms(path).unwrap_or_default()
 }
 
 /// Save the list of VMs to a JSON file.
@@ -406,14 +458,10 @@ pub fn save_vms(path: &Path, vms: &[VmConfig]) -> Result<(), String> {
 }
 
 /// Load application settings from a JSON file. Returns defaults if missing or corrupted.
+///
+/// Lenient in the same way as [`load_vms`]; prefer [`try_load_settings`].
 pub fn load_settings(path: &Path) -> AppSettings {
-    if !path.exists() {
-        return AppSettings::default();
-    }
-    match std::fs::read_to_string(path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => AppSettings::default(),
-    }
+    try_load_settings(path).unwrap_or_default()
 }
 
 /// Save application settings to a JSON file.
