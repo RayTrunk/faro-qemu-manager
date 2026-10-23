@@ -399,6 +399,42 @@ pub struct AppSettings {
     /// who never chose a directory follows the default when it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vm_dir: Option<PathBuf>,
+    /// Which way the New button takes.
+    #[serde(default)]
+    pub creation_mode: CreationMode,
+    /// Version of the settings layout this file was written by.
+    ///
+    /// Absent means the file predates the setting above, which is how an
+    /// existing installation is told apart from a fresh one. A plain serde
+    /// default could not make that distinction and would push the wizard onto
+    /// people who already have machines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<u32>,
+}
+
+/// Layout version [`save_settings`] stamps into every file it writes.
+pub const SETTINGS_SCHEMA: u32 = 1;
+
+/// The two ways to create a machine, as chosen in the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CreationMode {
+    /// Template gallery with two fields and two collapsed blocks.
+    #[serde(rename = "wizard")]
+    #[default]
+    Wizard,
+    /// An empty configuration appears and every field is set by hand. This is
+    /// what the application did before the wizard existed.
+    #[serde(rename = "direct")]
+    Direct,
+}
+
+impl CreationMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CreationMode::Wizard => "wizard",
+            CreationMode::Direct => "direct",
+        }
+    }
 }
 
 impl AppSettings {
@@ -424,6 +460,8 @@ impl Default for AppSettings {
             theme: default_theme(),
             default_arch: Arch::X86_64,
             vm_dir: None,
+            creation_mode: CreationMode::default(),
+            schema: None,
         }
     }
 }
@@ -674,7 +712,14 @@ pub fn load_settings(path: &Path) -> AppSettings {
 
 /// Save application settings to a JSON file.
 pub fn save_settings(path: &Path, settings: &AppSettings) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(settings)
+    // The marker goes in on every save, whatever the caller holds. Without it
+    // the next start would read this installation as a fresh one and change
+    // which way the New button takes.
+    let stamped = AppSettings {
+        schema: Some(SETTINGS_SCHEMA),
+        ..settings.clone()
+    };
+    let json = serde_json::to_string_pretty(&stamped)
         .map_err(|e| format!("Failed to serialize app settings: {}", e))?;
     write_config_file(path, json.as_bytes())
 }

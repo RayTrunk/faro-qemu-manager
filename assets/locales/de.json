@@ -104,5 +104,10 @@
   "wizard_hardware_block": "Hardware & Firmware",
   "wizard_network_block": "Netzwerk & Portweiterleitung",
   "wizard_needs_template": "Erst eine Vorlage waehlen, oder die leere Kachel",
-  "wizard_needs_name": "Die Maschine braucht einen Namen"
+  "wizard_needs_name": "Die Maschine braucht einen Namen",
+  "vm_dir": "VM-Verzeichnis",
+  "creation_mode": "Beim Anlegen einer Maschine",
+  "creation_mode_wizard": "Wizard mit Vorlagen",
+  "creation_mode_direct": "Direkt, alles selbst einstellen",
+  "create_failed": "{name} konnte nicht angelegt werden"
 }

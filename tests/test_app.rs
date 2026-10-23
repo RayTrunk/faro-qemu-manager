@@ -1,16 +1,20 @@
 // FARO QEMU MANAGER (C) R.Trunk 2026
 // Integration & End-to-End Application State Tests
 
+mod common;
+
 use egui::Context;
+use std::path::Path;
 use std::sync::mpsc;
 use tempfile::tempdir;
 
 use faro_qem::app::FaroQemApp;
 use faro_qem::config::{
-    load_settings, load_vms, Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, Firmware,
-    VmConfig,
+    claim_vm_folder, load_settings, load_vms, save_settings, vm_folder_name, Accelerator,
+    AppSettings, Arch, CreationMode, DriveConfig, DriveFormat, DriveInterface, Firmware, VmConfig,
 };
 use faro_qem::qemu::{nvram_path_for, spawn_qemu, QemuEvent};
+use faro_qem::templates::VmTemplate;
 use faro_qem::ui::console::LogLevel;
 use faro_qem::ui::sidebar::{SidebarAction, VmStatus};
 use faro_qem::ui::vm_detail::{DetailTab, VmDetailAction};
@@ -55,6 +59,10 @@ fn test_faro_qem_app_sidebar_actions() {
 
     let mut app = FaroQemApp::with_paths(settings_path, vms_path.clone(), None);
     let initial_vm_id = app.vms[0].id;
+
+    // This test is about the direct way, which a fresh installation no longer
+    // defaults to. The wizard way is covered by its own test.
+    app.settings.creation_mode = CreationMode::Direct;
 
     // 1. New VM
     app.handle_sidebar_action(SidebarAction::NewVm, None);
@@ -305,7 +313,9 @@ fn test_faro_qem_app_empty_state_rendering_and_recovery() {
         app.render_ui(ctx);
     });
 
-    // Create a new VM to recover from empty state
+    // Create a new VM to recover from empty state, the direct way: the
+    // wizard would open a dialog instead and add nothing yet.
+    app.settings.creation_mode = CreationMode::Direct;
     app.handle_sidebar_action(SidebarAction::NewVm, None);
     assert_eq!(app.vms.len(), 1);
     assert!(app.selected_vm_id.is_some());
@@ -438,6 +448,191 @@ fn test_a_uefi_vm_is_refused_when_no_firmware_was_found() {
         err.to_lowercase().contains("uefi"),
         "the message must name what is missing, got: {}",
         err
+    );
+}
+
+// --------------------------------------------------------------------------
+// Part 3a, task 5: creating a machine, and which way the New button takes
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_a_fresh_installation_starts_in_the_wizard_and_an_existing_one_does_not() {
+    // Spec 11.7: a schema marker tells the two apart. A plain serde default
+    // would push the wizard onto people who already have machines.
+    let dir = tempdir().unwrap();
+    let settings = dir.path().join("settings.json");
+    let vms = dir.path().join("vms.json");
+
+    let fresh = FaroQemApp::with_paths(settings.clone(), vms.clone(), None);
+    assert_eq!(fresh.settings.creation_mode, CreationMode::Wizard);
+    drop(fresh);
+
+    // An old installation: a settings file without the marker, beside a list.
+    std::fs::write(&settings, br#"{"language":"de","theme":"dark"}"#).unwrap();
+    std::fs::write(&vms, b"[]").unwrap();
+    let legacy = FaroQemApp::with_paths(settings, vms, None);
+    assert_eq!(
+        legacy.settings.creation_mode,
+        CreationMode::Direct,
+        "an existing installation keeps the way it knows"
+    );
+}
+
+#[test]
+fn test_a_settings_file_without_the_marker_but_without_a_list_is_fresh() {
+    let dir = tempdir().unwrap();
+    let settings = dir.path().join("settings.json");
+    std::fs::write(&settings, br#"{"language":"en","theme":"dark"}"#).unwrap();
+    let app = FaroQemApp::with_paths(settings, dir.path().join("vms.json"), None);
+    assert_eq!(app.settings.creation_mode, CreationMode::Wizard);
+}
+
+#[test]
+fn test_a_saved_settings_file_carries_the_marker_from_then_on() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    save_settings(&path, &AppSettings::default()).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("schema"),
+        "without the marker every start looks fresh again: {}",
+        text
+    );
+}
+
+#[test]
+fn test_creating_from_the_wizard_makes_the_folder_the_disk_and_the_nvram() {
+    let dir = tempdir().unwrap();
+    let vm_dir = dir.path().join("FARO-VMs");
+    let mut app = common::app_with_vm_dir(&vm_dir);
+
+    let draft = VmTemplate::by_key("windows-11")
+        .unwrap()
+        .instantiate("Win 11", Path::new(""));
+    let id = app
+        .create_from_wizard(draft, 1)
+        .expect("the machine is created");
+
+    let vm = app.vms.iter().find(|v| v.id == id).unwrap();
+    assert!(
+        vm.drives[0].path.is_file(),
+        "no disk at {}",
+        vm.drives[0].path.display()
+    );
+    assert!(vm.drives[0].path.starts_with(&vm_dir));
+    match &vm.firmware {
+        Firmware::Uefi { nvram } => {
+            assert!(nvram.is_file(), "no variable store at {}", nvram.display());
+            assert_eq!(
+                nvram.parent(),
+                vm.drives[0].path.parent(),
+                "the store travels with the machine"
+            );
+        }
+        other => panic!("windows-11 is a UEFI template, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_an_unwritable_vm_directory_leaves_no_half_made_vm() {
+    let dir = tempdir().unwrap();
+    let blocker = dir.path().join("vms-root");
+    std::fs::write(&blocker, b"a file where the directory must go").unwrap();
+    let mut app = common::app_with_vm_dir(&blocker);
+    let before = app.vms.len();
+
+    let draft = VmTemplate::by_key("debian")
+        .unwrap()
+        .instantiate("Debian", Path::new(""));
+    let err = app
+        .create_from_wizard(draft, 1)
+        .expect_err("an unusable VM directory must be reported");
+    assert!(err.contains("vms-root"), "name the path, got: {}", err);
+    assert_eq!(
+        app.vms.len(),
+        before,
+        "a failed creation must not leave a machine in the list"
+    );
+}
+
+#[test]
+fn test_a_failed_disk_leaves_no_vm_pointing_at_nothing() {
+    let dir = tempdir().unwrap();
+    let vm_dir = dir.path().join("FARO-VMs");
+    std::fs::create_dir_all(&vm_dir).unwrap();
+    let mut app = common::app_with_vm_dir(&vm_dir);
+
+    let draft = VmTemplate::by_key("alpine")
+        .unwrap()
+        .instantiate("Alpine", Path::new(""));
+    // Claim the folder the app will claim, then put a directory where the
+    // disk image has to go: qemu-img cannot write a file over a directory.
+    let folder = claim_vm_folder(&vm_dir, "Alpine", draft.id).unwrap();
+    std::fs::create_dir_all(folder.join("disk.qcow2")).unwrap();
+
+    let before = app.vms.len();
+    let err = app
+        .create_from_wizard(draft, 1)
+        .expect_err("a disk that cannot be made must be reported");
+    assert!(!err.is_empty());
+    assert_eq!(
+        app.vms.len(),
+        before,
+        "no machine may point at a disk that is not there"
+    );
+}
+
+#[test]
+fn test_the_empty_tile_creates_a_machine_with_no_disk() {
+    let dir = tempdir().unwrap();
+    let vm_dir = dir.path().join("FARO-VMs");
+    let mut app = common::app_with_vm_dir(&vm_dir);
+
+    let draft = VmConfig::new_default("Blank", Arch::X86_64);
+    let id = app.create_from_wizard(draft, 32).unwrap();
+    let vm = app.vms.iter().find(|v| v.id == id).unwrap();
+    assert!(vm.drives.is_empty(), "the empty tile promises nothing");
+    assert_eq!(vm.template, None);
+}
+
+#[test]
+fn test_the_folder_a_machine_gets_is_named_after_it() {
+    let dir = tempdir().unwrap();
+    let vm_dir = dir.path().join("FARO-VMs");
+    let mut app = common::app_with_vm_dir(&vm_dir);
+    let draft = VmTemplate::by_key("alpine")
+        .unwrap()
+        .instantiate("Alpine Test", Path::new(""));
+    let expected = vm_folder_name("Alpine Test", draft.id);
+    let id = app.create_from_wizard(draft, 1).unwrap();
+    let vm = app.vms.iter().find(|v| v.id == id).unwrap();
+    assert_eq!(
+        vm.drives[0].path.parent().unwrap().file_name().unwrap(),
+        expected.as_str()
+    );
+}
+
+#[test]
+fn test_the_new_button_takes_the_way_the_settings_say() {
+    let dir = tempdir().unwrap();
+    let vm_dir = dir.path().join("FARO-VMs");
+
+    let mut app = common::app_with_vm_dir(&vm_dir);
+    app.settings.creation_mode = CreationMode::Wizard;
+    let before = app.vms.len();
+    app.handle_sidebar_action(SidebarAction::NewVm, None);
+    assert!(app.wizard.open, "the wizard way opens the wizard");
+    assert_eq!(app.vms.len(), before, "and creates nothing yet");
+
+    let mut app = common::app_with_vm_dir(&vm_dir);
+    app.settings.creation_mode = CreationMode::Direct;
+    let before = app.vms.len();
+    app.handle_sidebar_action(SidebarAction::NewVm, None);
+    assert!(!app.wizard.open, "the direct way does not");
+    assert_eq!(
+        app.vms.len(),
+        before + 1,
+        "it adds an empty machine, exactly as before"
     );
 }
 

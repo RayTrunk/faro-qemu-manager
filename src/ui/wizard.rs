@@ -22,13 +22,21 @@ pub enum WizardAction {
     /// Create this machine. Nothing has been written yet: the caller claims
     /// the folder, makes the disk and the variable store, and only then adds
     /// the machine to the list.
-    Create(VmConfig),
+    Create {
+        vm: VmConfig,
+        /// Size of the disk image to make, in GB. The configuration itself
+        /// carries no size — a disk is simply a file afterwards — so it
+        /// travels with the request that creates one.
+        disk_gb: u32,
+    },
     /// Closed without creating anything.
     Cancel,
 }
 
+/// Disk size for a machine started from the empty tile, which names none.
+pub const DEFAULT_DISK_GB: u32 = 32;
+
 /// Everything the wizard remembers between frames.
-#[derive(Default)]
 pub struct WizardState {
     pub open: bool,
     /// Key of the highlighted template tile. `None` means the empty tile, or
@@ -42,6 +50,24 @@ pub struct WizardState {
     /// The machine as it stands. Built when a tile is clicked, then edited in
     /// place.
     pub draft: Option<VmConfig>,
+    /// Size of the disk image to make. Not part of the configuration, which
+    /// only records where the disk is.
+    pub disk_gb: u32,
+}
+
+impl Default for WizardState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            selected: None,
+            name: String::new(),
+            iso: String::new(),
+            hardware_open: false,
+            network_open: false,
+            draft: None,
+            disk_gb: DEFAULT_DISK_GB,
+        }
+    }
 }
 
 impl WizardState {
@@ -52,6 +78,7 @@ impl WizardState {
     pub fn select(&mut self, key: &str) {
         if let Some(template) = VmTemplate::by_key(key) {
             self.selected = Some(template.key);
+            self.disk_gb = template.disk_gb;
             self.draft = Some(template.instantiate(&self.name, Path::new("")));
         }
     }
@@ -59,6 +86,7 @@ impl WizardState {
     /// Start from nothing, which is what the direct way gives.
     pub fn select_empty(&mut self, arch: Arch) {
         self.selected = None;
+        self.disk_gb = DEFAULT_DISK_GB;
         self.draft = Some(VmConfig::new_default(&self.name, arch));
     }
 
@@ -241,12 +269,14 @@ impl<'a> WizardDialog<'a> {
             "machine",
             "vga_type",
             "interface",
+            "size_gb",
         ]
         .iter()
         .map(|k| self.i18n.t(k).to_string())
         .collect();
         let caps = self.capabilities;
         let was_open = self.state.hardware_open;
+        let mut disk_gb = self.state.disk_gb;
         let draft = &mut self.state.draft;
 
         let response = egui::CollapsingHeader::new(header)
@@ -328,10 +358,15 @@ impl<'a> WizardDialog<'a> {
                                     }
                                 });
                             ui.end_row();
+
+                            ui.label(&labels[6]);
+                            ui.add(egui::DragValue::new(&mut disk_gb).range(1..=4096));
+                            ui.end_row();
                         }
                     });
             });
 
+        self.state.disk_gb = disk_gb;
         if response.header_response.clicked() {
             self.state.hardware_open = !was_open;
         }
@@ -431,6 +466,7 @@ impl<'a> WizardDialog<'a> {
         let create_label = format!("{} {}", icons::ADD, self.i18n.t("create"));
         let cancel_label = self.i18n.t("cancel").to_string();
         let reason = blocked.map(|key| self.i18n.t(key).to_string());
+        let disk_gb = self.state.disk_gb;
         let state = &mut *self.state;
 
         ui.horizontal(|ui| {
@@ -439,7 +475,7 @@ impl<'a> WizardDialog<'a> {
                 .clicked()
             {
                 if let Some(vm) = state.take_draft() {
-                    action = Some(WizardAction::Create(vm));
+                    action = Some(WizardAction::Create { vm, disk_gb });
                 }
             }
             if ui.button(&cancel_label).clicked() {
@@ -467,11 +503,11 @@ impl<'a> WizardDialog<'a> {
             Firmware::Uefi { .. } => "UEFI",
             Firmware::Bios { .. } => "BIOS",
         };
-        let disk = self
-            .state
-            .template()
-            .map(|t| format!(", {} GB", t.disk_gb))
-            .unwrap_or_default();
+        let disk = if draft.drives.is_empty() {
+            String::new()
+        } else {
+            format!(", {} GB", self.state.disk_gb)
+        };
         let interface = draft
             .drives
             .first()

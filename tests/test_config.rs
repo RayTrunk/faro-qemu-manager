@@ -1,7 +1,8 @@
 use faro_qem::config::{
     claim_vm_folder, default_vm_dir, load_settings, load_vms, save_settings, save_vms,
-    try_load_vms, vm_folder_name, Accelerator, AppSettings, Arch, DisplayConfig, DriveConfig,
-    DriveFormat, DriveInterface, Firmware, NetworkConfig, PortForwardRule, VmConfig,
+    try_load_vms, vm_folder_name, Accelerator, AppSettings, Arch, CreationMode, DisplayConfig,
+    DriveConfig, DriveFormat, DriveInterface, Firmware, NetworkConfig, PortForwardRule, VmConfig,
+    SETTINGS_SCHEMA,
 };
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -134,6 +135,10 @@ fn test_save_and_load_settings_persistence() {
         theme: "light".to_string(),
         default_arch: Arch::Aarch64,
         vm_dir: Some(PathBuf::from(r"D:\FARO-VMs")),
+        creation_mode: CreationMode::Direct,
+        // save_settings stamps the marker in, so a round trip comes back
+        // carrying it whatever was handed over.
+        schema: Some(SETTINGS_SCHEMA),
     };
 
     save_settings(&path, &custom_settings).expect("save settings successfully");

@@ -171,3 +171,34 @@ pub fn catalogue_keys(lang: &str) -> std::collections::BTreeSet<String> {
         .unwrap_or_else(|e| panic!("{} is not a catalogue: {}", path, e));
     map.into_keys().collect()
 }
+
+/// An app whose VM folders go into `vm_dir`.
+///
+/// Used from three test files, which is why it lives here rather than being
+/// copied into each.
+pub fn app_with_vm_dir(vm_dir: &Path) -> faro_qem::app::FaroQemApp {
+    let parent = vm_dir.parent().unwrap_or(vm_dir);
+    let mut app = faro_qem::app::FaroQemApp::with_paths(
+        parent.join("settings.json"),
+        parent.join("vms.json"),
+        None,
+    );
+    app.settings.vm_dir = Some(vm_dir.to_path_buf());
+    app
+}
+
+/// Everything the settings dialog draws, after a layout pass.
+pub fn rendered_settings(
+    settings: &mut faro_qem::config::AppSettings,
+    i18n: &mut faro_qem::i18n::I18n,
+) -> String {
+    let ctx = egui::Context::default();
+    let mut open = true;
+    let _ = ctx.run(Default::default(), |ctx| {
+        faro_qem::ui::SettingsDialog::new(&mut open, settings, i18n).show(ctx);
+    });
+    let output = ctx.run(Default::default(), |ctx| {
+        faro_qem::ui::SettingsDialog::new(&mut open, settings, i18n).show(ctx);
+    });
+    rendered_text(&output)
+}

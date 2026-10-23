@@ -4,7 +4,7 @@
 use egui::Context;
 use std::path::PathBuf;
 
-use crate::config::{AppSettings, Arch};
+use crate::config::{default_vm_dir, AppSettings, Arch, CreationMode};
 use crate::i18n::I18n;
 use crate::qemu::find_qemu_binary;
 use crate::ui::theme::{apply_theme, icons, COLOR_RUNNING, COLOR_WARNING};
@@ -136,6 +136,78 @@ impl<'a> SettingsDialog<'a> {
                         self.settings.default_arch = selected_arch;
                         modified = true;
                     }
+                    ui.end_row();
+
+                    // Which way the New button takes. Both ways stay: the
+                    // wizard is a starting point, not a replacement.
+                    ui.label(egui::RichText::new(self.i18n.t("creation_mode")).strong());
+                    let mut mode = self.settings.creation_mode;
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(
+                            &mut mode,
+                            CreationMode::Wizard,
+                            self.i18n.t("creation_mode_wizard"),
+                        );
+                        ui.selectable_value(
+                            &mut mode,
+                            CreationMode::Direct,
+                            self.i18n.t("creation_mode_direct"),
+                        );
+                    });
+                    if mode != self.settings.creation_mode {
+                        self.settings.creation_mode = mode;
+                        modified = true;
+                    }
+                    ui.end_row();
+
+                    // Where VM folders go. Empty means the default, which is
+                    // not the same as freezing today's default into the file.
+                    ui.label(egui::RichText::new(self.i18n.t("vm_dir")).strong());
+                    ui.horizontal(|ui| {
+                        let mut shown = self
+                            .settings
+                            .vm_dir
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let default_hint = default_vm_dir().to_string_lossy().to_string();
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(&mut shown)
+                                .desired_width(260.0)
+                                .hint_text(default_hint),
+                        );
+                        if edit.changed() {
+                            let trimmed = shown.trim();
+                            self.settings.vm_dir = if trimmed.is_empty() {
+                                None
+                            } else {
+                                Some(PathBuf::from(trimmed))
+                            };
+                            modified = true;
+                        }
+                        if ui
+                            .button(format!("{} {}", icons::FOLDER, self.i18n.t("browse")))
+                            .clicked()
+                        {
+                            let mut dialog = rfd::FileDialog::new();
+                            if let Some(cur) = &self.settings.vm_dir {
+                                dialog = dialog.set_directory(cur);
+                            }
+                            if let Some(folder) = dialog.pick_folder() {
+                                self.settings.vm_dir = Some(folder);
+                                modified = true;
+                            }
+                        }
+                        if self.settings.vm_dir.is_some()
+                            && ui
+                                .button(icons::CLOSE)
+                                .on_hover_text(self.i18n.t("clear"))
+                                .clicked()
+                        {
+                            self.settings.vm_dir = None;
+                            modified = true;
+                        }
+                    });
                     ui.end_row();
                 });
 

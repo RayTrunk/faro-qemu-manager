@@ -7,15 +7,15 @@ use std::sync::mpsc;
 use uuid::Uuid;
 
 use crate::config::{
-    default_settings_path, default_vms_path, quarantine_file, recovery_for, save_settings,
-    save_vms, try_load_settings, try_load_vms, AppSettings, ConfigLoadError, ConfigRecovery,
-    Firmware, VmConfig,
+    claim_vm_folder, default_settings_path, default_vms_path, quarantine_file, recovery_for,
+    save_settings, save_vms, try_load_settings, try_load_vms, AppSettings, ConfigLoadError,
+    ConfigRecovery, CreationMode, Firmware, VmConfig,
 };
 use crate::i18n::I18n;
 use crate::qemu::{
-    build_qemu_args, find_qemu_binary, find_qemu_img, find_uefi_firmware, nvram_path_for,
-    prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent, UefiFirmware,
-    VmProcess,
+    build_qemu_args, create_disk_image, find_qemu_binary, find_qemu_img, find_uefi_firmware,
+    nvram_path_for, prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent,
+    UefiFirmware, VmProcess,
 };
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
@@ -23,6 +23,7 @@ use crate::ui::settings::SettingsDialog;
 use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
 use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
 use crate::ui::vm_detail::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
+use crate::ui::wizard::{WizardAction, WizardDialog, WizardState};
 
 /// FARO QEMU MANAGER central application state
 pub struct FaroQemApp {
@@ -58,6 +59,8 @@ pub struct FaroQemApp {
     /// time as the capabilities. Searching for it is a handful of `is_file`
     /// calls, which is fine once and wrong once per frame.
     pub uefi_firmware: Option<UefiFirmware>,
+    /// The template wizard, when the settings take that way.
+    pub wizard: WizardState,
 }
 
 /// Short, human-facing name for a configuration path.
@@ -179,6 +182,15 @@ impl FaroQemApp {
             }
         };
 
+        // Spec 11.7: no schema marker beside an existing machine list means
+        // this installation predates the wizard, and it keeps the way it
+        // knows. A plain serde default could not tell the two apart.
+        let mut settings = settings;
+        if settings.schema.is_none() && vms_path.exists() {
+            settings.creation_mode = CreationMode::Direct;
+        }
+        let settings = settings;
+
         let i18n = I18n::new(&settings.language);
 
         // A VM list that exists but could not be loaded is the user's data.
@@ -247,6 +259,7 @@ impl FaroQemApp {
             settings_write_blocked,
             capabilities,
             uefi_firmware,
+            wizard: WizardState::default(),
         }
     }
 
@@ -302,6 +315,51 @@ impl FaroQemApp {
                 e
             )
         })
+    }
+
+    /// Create the machine the wizard drew up.
+    ///
+    /// The order matters, so that a failure leaves nothing behind: claim the
+    /// folder, move the paths into it, make the disk, make the variable
+    /// store, and only then put the machine in the list. Every step before
+    /// the last returns an error instead, and the list is untouched.
+    ///
+    /// The variable store comes after the disk because its path is derived
+    /// from the disk's folder; the other way round the store would land
+    /// beside the old disk and the machine would not start.
+    pub fn create_from_wizard(&mut self, draft: VmConfig, disk_gb: u32) -> Result<Uuid, String> {
+        let mut vm = draft;
+        let root = self.settings.vm_dir_or_default();
+        let folder = claim_vm_folder(&root, &vm.name, vm.id)?;
+
+        if let Some(drive) = vm.drives.first_mut() {
+            let file_name = drive
+                .path
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from("disk.qcow2"));
+            drive.path = folder.join(file_name);
+        }
+        if matches!(vm.firmware, Firmware::Uefi { .. }) {
+            vm.firmware = Firmware::Uefi {
+                nvram: nvram_path_for(&vm),
+            };
+        }
+
+        if let Some(drive) = vm.drives.first() {
+            if !drive.path.is_file() {
+                let qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref())
+                    .ok_or_else(|| "qemu-img was not found; cannot create a disk".to_string())?;
+                create_disk_image(&qemu_img, &drive.path, drive.format, disk_gb)?;
+            }
+        }
+        self.ensure_nvram(&vm)?;
+
+        let id = vm.id;
+        self.vms.push(vm);
+        self.selected_vm_id = Some(id);
+        self.save_vms_now();
+        Ok(id)
     }
 
     /// Make sure a UEFI machine has the variable store QEMU demands.
@@ -527,6 +585,12 @@ impl FaroQemApp {
         match action {
             SidebarAction::SelectVm(id) => {
                 self.selected_vm_id = Some(id);
+            }
+            SidebarAction::NewVm if self.settings.creation_mode == CreationMode::Wizard => {
+                self.wizard = WizardState {
+                    open: true,
+                    ..Default::default()
+                };
             }
             SidebarAction::NewVm => {
                 let mut new_vm = VmConfig::default();
@@ -859,6 +923,29 @@ impl FaroQemApp {
                 self.save_settings_now();
                 apply_theme(ctx, &self.settings.theme);
                 self.i18n.set_locale(&self.settings.language);
+            }
+        }
+
+        // 5b. The template wizard
+        if self.wizard.open {
+            let action = WizardDialog::new(&mut self.wizard, &self.i18n)
+                .with_capabilities(&self.capabilities)
+                .with_firmware(self.uefi_firmware.is_some())
+                .show(ctx);
+            match action {
+                Some(WizardAction::Create { vm, disk_gb }) => {
+                    let name = vm.name.clone();
+                    if let Err(e) = self.create_from_wizard(vm, disk_gb) {
+                        // Nothing was added to the list, so the only thing
+                        // left to do is say what went wrong.
+                        self.push_notice(Notice::error(format!(
+                            "{}: {}",
+                            self.i18n.tf("create_failed", &[("name", &name)]),
+                            e
+                        )));
+                    }
+                }
+                Some(WizardAction::Cancel) | None => {}
             }
         }
 

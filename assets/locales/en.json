@@ -104,5 +104,10 @@
   "wizard_hardware_block": "Hardware & firmware",
   "wizard_network_block": "Network & port forwarding",
   "wizard_needs_template": "Pick a template first, or the empty tile",
-  "wizard_needs_name": "The machine needs a name"
+  "wizard_needs_name": "The machine needs a name",
+  "vm_dir": "VM directory",
+  "creation_mode": "When creating a machine",
+  "creation_mode_wizard": "Wizard with templates",
+  "creation_mode_direct": "Direct, set everything by hand",
+  "create_failed": "Could not create {name}"
 }

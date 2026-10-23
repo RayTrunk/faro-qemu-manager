@@ -1,6 +1,8 @@
 // FARO QEMU MANAGER (C) R.Trunk 2026
 // Unit tests for Sidebar and Settings Dialog components
 
+mod common;
+
 use egui::Context;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -266,6 +268,8 @@ fn test_settings_dialog_open_rendering() {
         theme: "dark".to_string(),
         default_arch: Arch::X86_64,
         vm_dir: None,
+        creation_mode: Default::default(),
+        schema: None,
     };
     let mut open = true;
 
@@ -336,4 +340,39 @@ fn test_settings_dialog_qemu_dir_modification() {
     // Clear path
     settings.qemu_dir = None;
     assert_eq!(settings.qemu_dir, None);
+}
+
+#[test]
+fn test_the_settings_dialog_offers_the_vm_directory_and_the_creation_mode() {
+    let i18n = I18n::new("en");
+    let mut settings = AppSettings::default();
+    let mut dialog_i18n = I18n::new("en");
+    let drawn = common::rendered_settings(&mut settings, &mut dialog_i18n);
+    assert!(drawn.contains(i18n.t("vm_dir")), "drew:\n{}", drawn);
+    assert!(drawn.contains(i18n.t("creation_mode")), "drew:\n{}", drawn);
+    assert!(
+        drawn.contains(i18n.t("creation_mode_wizard")),
+        "drew:\n{}",
+        drawn
+    );
+    assert!(
+        drawn.contains(i18n.t("creation_mode_direct")),
+        "drew:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_the_creation_mode_texts_are_in_all_three_catalogues() {
+    for lang in ["en", "de", "fr"] {
+        let keys = common::catalogue_keys(lang);
+        for key in [
+            "vm_dir",
+            "creation_mode",
+            "creation_mode_wizard",
+            "creation_mode_direct",
+        ] {
+            assert!(keys.contains(key), "{} missing in {}", key, lang);
+        }
+    }
 }

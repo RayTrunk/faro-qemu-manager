@@ -104,5 +104,10 @@
   "wizard_hardware_block": "Materiel et micrologiciel",
   "wizard_network_block": "Reseau et redirection de ports",
   "wizard_needs_template": "Choisissez d abord un modele, ou la tuile vide",
-  "wizard_needs_name": "La machine a besoin d un nom"
+  "wizard_needs_name": "La machine a besoin d un nom",
+  "vm_dir": "Repertoire des VM",
+  "creation_mode": "Lors de la creation d une machine",
+  "creation_mode_wizard": "Assistant avec modeles",
+  "creation_mode_direct": "Direct, tout regler soi-meme",
+  "create_failed": "Impossible de creer {name}"
 }
