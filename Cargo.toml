@@ -17,3 +17,6 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 
 [dev-dependencies]
 tempfile = "3.12"
+
+[build-dependencies]
+winres = "0.1"
