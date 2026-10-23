@@ -276,3 +276,131 @@ fn test_every_offered_display_backend_is_one_qemu_knows() {
     });
     common::assert_accepted("display=default", Arch::X86_64, &build_qemu_args(&vm));
 }
+
+// --------------------------------------------------------------------------
+// Combinations, not single dimensions
+//
+// One disk of each kind proves almost nothing: the index and bus arithmetic
+// only goes wrong from the second disk on, and a boot index only lands in the
+// wrong namespace when there is a format beside it. These tables probe the
+// combinations a person reaches with ordinary clicks.
+// --------------------------------------------------------------------------
+
+/// A machine with `count` disks of one interface, boot-indexed or not.
+fn vm_with_disks(
+    dir: &std::path::Path,
+    iface: DriveInterface,
+    count: u32,
+    boot_indexed: bool,
+) -> VmConfig {
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    vm.memory_mb = PROBE_MEMORY_MB;
+    for n in 0..count {
+        let disk = dir.join(format!("{}-{}.qcow2", iface.as_str(), n));
+        common::make_empty_qcow2(&disk);
+        vm.drives.push(DriveConfig {
+            path: disk,
+            format: DriveFormat::Qcow2,
+            interface: iface,
+            boot_index: boot_indexed.then_some(n),
+        });
+    }
+    vm
+}
+
+#[test]
+fn test_qemu_accepts_one_two_and_three_disks_of_every_interface() {
+    let dir = tempfile::tempdir().unwrap();
+    for iface in DriveInterface::all() {
+        for count in 1..=3 {
+            let vm = vm_with_disks(dir.path(), *iface, count, false);
+            common::assert_accepted(
+                &format!("{} x{}", iface.as_str(), count),
+                Arch::X86_64,
+                &build_qemu_args(&vm),
+            );
+        }
+    }
+}
+
+#[test]
+fn test_qemu_accepts_a_boot_index_on_every_interface() {
+    let dir = tempfile::tempdir().unwrap();
+    for iface in DriveInterface::all() {
+        for count in 1..=2 {
+            let vm = vm_with_disks(dir.path(), *iface, count, true);
+            common::assert_accepted(
+                &format!("{} x{} boot-indexed", iface.as_str(), count),
+                Arch::X86_64,
+                &build_qemu_args(&vm),
+            );
+        }
+    }
+}
+
+#[test]
+fn test_qemu_accepts_ide_disks_alongside_isos() {
+    let dir = tempfile::tempdir().unwrap();
+    for disks in 1..=3 {
+        for isos in 0..=2 {
+            let mut vm = vm_with_disks(dir.path(), DriveInterface::Ide, disks, false);
+            for n in 0..isos {
+                let iso = dir.path().join(format!("iso-{}.iso", n));
+                std::fs::write(&iso, b"").unwrap();
+                vm.cdroms.push(iso);
+            }
+            common::assert_accepted(
+                &format!("{} IDE disks + {} ISOs", disks, isos),
+                Arch::X86_64,
+                &build_qemu_args(&vm),
+            );
+        }
+    }
+}
+
+#[test]
+fn test_qemu_accepts_a_path_with_a_space_and_a_comma() {
+    let dir = tempfile::tempdir().unwrap();
+    let odd = dir.path().join("My VMs, really");
+    std::fs::create_dir_all(&odd).unwrap();
+
+    let disk = odd.join("disk,1.qcow2");
+    common::make_empty_qcow2(&disk);
+    let iso = odd.join("setup,disc 1.iso");
+    std::fs::write(&iso, b"").unwrap();
+
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    vm.memory_mb = PROBE_MEMORY_MB;
+    vm.drives.push(DriveConfig {
+        path: disk,
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::Sata,
+        boot_index: Some(0),
+    });
+    vm.cdroms.push(iso);
+
+    common::assert_accepted("comma path", Arch::X86_64, &build_qemu_args(&vm));
+}
+
+/// The IDE bus arithmetic differs between the AHCI controller of q35 and the
+/// PIIX pair of i440fx. Only q35 is offered by the UI, but a saved
+/// configuration may still name the other, and a wrong mapping produces a VM
+/// that cannot start — so QEMU is asked about both.
+#[test]
+fn test_qemu_accepts_boot_indexed_ide_disks_on_both_x86_machines() {
+    let dir = tempfile::tempdir().unwrap();
+    for machine in ["q35", "pc", "pc-i440fx-9.2"] {
+        for disks in 1..=3 {
+            let mut vm = vm_with_disks(dir.path(), DriveInterface::Ide, disks, true);
+            vm.machine_type = machine.to_string();
+            let iso = dir.path().join("boot.iso");
+            std::fs::write(&iso, b"").unwrap();
+            vm.cdroms.push(iso);
+            common::assert_accepted(
+                &format!("{}: {} boot-indexed IDE disks + ISO", machine, disks),
+                Arch::X86_64,
+                &build_qemu_args(&vm),
+            );
+        }
+    }
+}

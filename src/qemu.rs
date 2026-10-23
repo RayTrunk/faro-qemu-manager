@@ -336,19 +336,79 @@ fn append_bootindex(device: &mut String, boot_index: Option<u32>) {
     }
 }
 
-/// Build the drive arguments for a VM.
+/// How many drives one IDE bus of `machine` carries.
 ///
-/// `virtio` and `ide` are bus types QEMU really has, and keep the short
-/// `if=` form. `sata`, `nvme` and `scsi` are not: QEMU rejects `if=sata` and
-/// `if=nvme` as unsupported bus types and refuses `if=scsi` on q35 outright.
-/// Those get an anonymous backing drive plus an explicit device, and their
-/// controller is added once however many disks hang off it.
-pub fn build_drive_args(drives: &[DriveConfig]) -> Vec<String> {
+/// q35's built-in controller is AHCI: six buses of one unit each. The i440fx
+/// machines keep the classic PIIX pair, two buses of two units. Guessing wrong
+/// produces `Can't create IDE unit 1, bus supports only 1 units` or
+/// `Bus 'ide.2' not found`, so the number is read off the machine name. Both
+/// mappings are proven against the installed QEMU by the acceptance tests.
+fn ide_units_per_bus(machine: &str) -> u32 {
+    if machine.starts_with("q35") {
+        1
+    } else {
+        2
+    }
+}
+
+/// How a VM's IDE disks and CD-ROMs share the machine's IDE slots.
+///
+/// The short `if=ide` form lets QEMU allocate slots itself, which works on
+/// every machine type and is therefore the default. It cannot carry a
+/// `bootindex`, though — with a `format=` beside it the option lands in the
+/// block-format namespace and QEMU answers `Block format 'qcow2' does not
+/// support the option 'bootindex'`. So one IDE disk asking for a boot index
+/// moves the whole IDE group, CD-ROMs included, onto explicit devices, and
+/// then the slots must be handed out here: a `-drive media=cdrom` left on the
+/// short form would grab a slot an explicit `ide-hd` already holds.
+pub struct IdeLayout {
+    explicit: bool,
+    next_slot: u32,
+    units_per_bus: u32,
+}
+
+impl IdeLayout {
+    /// Slots allocated by QEMU, the form that works on every machine.
+    pub fn new(machine: &str) -> Self {
+        IdeLayout {
+            explicit: false,
+            next_slot: 0,
+            units_per_bus: ide_units_per_bus(machine),
+        }
+    }
+
+    /// Whether disks and CD-ROMs are placed by explicit device arguments.
+    pub fn is_explicit(&self) -> bool {
+        self.explicit
+    }
+
+    /// The `bus=`/`unit=` suffix for the next free IDE slot.
+    fn take_slot(&mut self) -> String {
+        let bus = self.next_slot / self.units_per_bus;
+        let unit = self.next_slot % self.units_per_bus;
+        self.next_slot += 1;
+        format!(",bus=ide.{},unit={}", bus, unit)
+    }
+}
+
+/// Build the drive arguments for a VM running on `machine`.
+///
+/// Every interface but `ide` gets an anonymous backing drive plus an explicit
+/// device: `sata`, `nvme` and `scsi` because QEMU has no such `if=` bus type,
+/// and `virtio` because only the device form accepts a boot index. Controllers
+/// are added once however many disks hang off them.
+///
+/// Returns the arguments and the IDE layout the CD-ROMs must continue.
+pub fn build_drive_args(drives: &[DriveConfig], machine: &str) -> (Vec<String>, IdeLayout) {
     let mut args = Vec::new();
     let mut ahci_added = false;
     let mut scsi_added = false;
     let mut ahci_unit = 0u32;
-    let mut scsi_unit = 0u32;
+
+    let mut ide = IdeLayout::new(machine);
+    ide.explicit = drives
+        .iter()
+        .any(|d| d.interface == DriveInterface::Ide && d.boot_index.is_some());
 
     for (idx, drive) in drives.iter().enumerate() {
         let file = escape_opt_value(&drive.path.display().to_string());
@@ -356,18 +416,25 @@ pub fn build_drive_args(drives: &[DriveConfig]) -> Vec<String> {
         let id = format!("{}-drive-{}", ID_PREFIX, idx);
 
         match drive.interface {
-            DriveInterface::VirtIO | DriveInterface::Ide => {
-                let mut spec = format!(
-                    "file={},format={},if={}",
-                    file,
-                    format,
-                    drive.interface.as_str()
-                );
-                if let Some(index) = drive.boot_index {
-                    spec.push_str(&format!(",bootindex={}", index));
+            DriveInterface::VirtIO => {
+                push_backing_drive(&mut args, &file, format, &id);
+                let mut device = format!("virtio-blk-pci,drive={}", id);
+                append_bootindex(&mut device, drive.boot_index);
+                args.push("-device".to_string());
+                args.push(device);
+            }
+
+            DriveInterface::Ide => {
+                if ide.explicit {
+                    push_backing_drive(&mut args, &file, format, &id);
+                    let mut device = format!("ide-hd,drive={}{}", id, ide.take_slot());
+                    append_bootindex(&mut device, drive.boot_index);
+                    args.push("-device".to_string());
+                    args.push(device);
+                } else {
+                    args.push("-drive".to_string());
+                    args.push(format!("file={},format={},if=ide", file, format));
                 }
-                args.push("-drive".to_string());
-                args.push(spec);
             }
 
             DriveInterface::Sata => {
@@ -401,40 +468,46 @@ pub fn build_drive_args(drives: &[DriveConfig]) -> Vec<String> {
                     scsi_added = true;
                 }
                 push_backing_drive(&mut args, &file, format, &id);
-                let mut device =
-                    format!("scsi-hd,drive={},bus={}-scsi.{}", id, ID_PREFIX, scsi_unit);
+                // virtio-scsi-pci has exactly one bus; disks on it are told
+                // apart by the scsi-id and lun QEMU assigns, not by the bus.
+                let mut device = format!("scsi-hd,drive={},bus={}-scsi.0", id, ID_PREFIX);
                 append_bootindex(&mut device, drive.boot_index);
                 args.push("-device".to_string());
                 args.push(device);
-                scsi_unit += 1;
             }
         }
     }
 
-    args
+    (args, ide)
 }
 
-/// Build the CD-ROM arguments for a VM.
+/// Build the CD-ROM arguments for a VM, continuing `ide`.
 ///
-/// `-cdrom` is shorthand for a single drive at a fixed index, so giving it
+/// `-cdrom` is shorthand for a single drive at a fixed slot, so giving it
 /// twice makes QEMU refuse to start with "drive with bus=2, unit=0 exists".
-/// Each ISO therefore becomes its own CD-ROM drive at a distinct index.
-/// Indices start at 2 because 0 and 1 are taken by the automatic slots.
-pub fn build_cdrom_args(cdroms: &[PathBuf]) -> Vec<String> {
+/// A fixed `index=` has the same defect one step later: IDE disks occupy the
+/// same slots, and three of them plus an ISO brings the collision back. So no
+/// index is named at all — QEMU hands out the next free slot — unless the
+/// disks are on explicit devices, in which case the CD-ROMs must be too.
+pub fn build_cdrom_args(cdroms: &[PathBuf], ide: &mut IdeLayout) -> Vec<String> {
     let mut args = Vec::new();
-    let mut index = 2u32;
 
-    for cdrom in cdroms {
+    for (idx, cdrom) in cdroms.iter().enumerate() {
         if cdrom.as_os_str().is_empty() {
             continue;
         }
-        args.push("-drive".to_string());
-        args.push(format!(
-            "media=cdrom,index={},file={}",
-            index,
-            escape_opt_value(&cdrom.display().to_string())
-        ));
-        index += 1;
+        let file = escape_opt_value(&cdrom.display().to_string());
+
+        if ide.explicit {
+            let id = format!("{}-cdrom-{}", ID_PREFIX, idx);
+            args.push("-drive".to_string());
+            args.push(format!("media=cdrom,if=none,id={},file={}", id, file));
+            args.push("-device".to_string());
+            args.push(format!("ide-cd,drive={}{}", id, ide.take_slot()));
+        } else {
+            args.push("-drive".to_string());
+            args.push(format!("media=cdrom,file={}", file));
+        }
     }
 
     args
@@ -636,10 +709,11 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
     }
 
     // 4. Drives
-    args.extend(build_drive_args(&vm.drives));
+    let (drive_args, mut ide) = build_drive_args(&vm.drives, machine_type);
+    args.extend(drive_args);
 
-    // 5. CD-ROMs
-    args.extend(build_cdrom_args(&vm.cdroms));
+    // 5. CD-ROMs, continuing the IDE slots the disks left free
+    args.extend(build_cdrom_args(&vm.cdroms, &mut ide));
 
     // 6. Firmware
     args.extend(build_firmware_args(

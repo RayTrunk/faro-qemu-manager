@@ -4,8 +4,13 @@ use faro_qem::config::{
 };
 use faro_qem::qemu::{
     build_cdrom_args, build_drive_args, build_firmware_args, build_network_args, build_qemu_args,
-    create_disk_image, find_qemu_binary, find_qemu_img, UefiFirmware,
+    create_disk_image, find_qemu_binary, find_qemu_img, IdeLayout, UefiFirmware,
 };
+
+/// The drive arguments for `drives` on the machine the UI offers for x86.
+fn drive_args(drives: &[DriveConfig]) -> Vec<String> {
+    build_drive_args(drives, "q35").0
+}
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -77,7 +82,7 @@ fn test_build_qemu_args_all_components() {
     assert!(joined.contains("-bios /path/to/bios.bin"));
     // An ISO is its own CD-ROM drive now: -cdrom cannot be given twice, so it
     // cannot be the construction when more than one ISO is allowed.
-    assert!(joined.contains("media=cdrom,index=2,file=/path/to/install.iso"));
+    assert!(joined.contains("media=cdrom,file=/path/to/install.iso"));
     assert!(joined.contains("-vga virtio"));
     assert!(joined.contains("-display default"));
     assert!(joined.contains("-full-screen"));
@@ -228,7 +233,7 @@ fn drive(path: &str, iface: DriveInterface) -> DriveConfig {
 
 #[test]
 fn test_sata_drive_uses_an_ahci_controller() {
-    let args = build_drive_args(&[drive("d.qcow2", DriveInterface::Sata)]).join(" ");
+    let args = drive_args(&[drive("d.qcow2", DriveInterface::Sata)]).join(" ");
     assert!(args.contains("-device ahci,id=faro-ahci"), "got: {}", args);
     assert!(args.contains("if=none,id=faro-drive-0"));
     assert!(args.contains("-device ide-hd,drive=faro-drive-0,bus=faro-ahci.0"));
@@ -240,7 +245,7 @@ fn test_sata_drive_uses_an_ahci_controller() {
 
 #[test]
 fn test_nvme_drive_gets_the_serial_qemu_demands() {
-    let args = build_drive_args(&[drive("d.qcow2", DriveInterface::Nvme)]).join(" ");
+    let args = drive_args(&[drive("d.qcow2", DriveInterface::Nvme)]).join(" ");
     assert!(
         args.contains("-device nvme,drive=faro-drive-0,serial="),
         "got: {}",
@@ -251,7 +256,7 @@ fn test_nvme_drive_gets_the_serial_qemu_demands() {
 
 #[test]
 fn test_scsi_drive_uses_a_virtio_scsi_controller() {
-    let args = build_drive_args(&[drive("d.qcow2", DriveInterface::Scsi)]).join(" ");
+    let args = drive_args(&[drive("d.qcow2", DriveInterface::Scsi)]).join(" ");
     assert!(
         args.contains("-device virtio-scsi-pci,id=faro-scsi"),
         "got: {}",
@@ -262,13 +267,22 @@ fn test_scsi_drive_uses_a_virtio_scsi_controller() {
 }
 
 #[test]
-fn test_virtio_and_ide_keep_the_short_form() {
-    let args = build_drive_args(&[
+fn test_virtio_uses_a_block_device_and_plain_ide_keeps_the_short_form() {
+    let args = drive_args(&[
         drive("a.qcow2", DriveInterface::VirtIO),
         drive("b.qcow2", DriveInterface::Ide),
     ])
     .join(" ");
-    assert!(args.contains("if=virtio"));
+    // if=virtio cannot carry a boot index, so virtio always goes through the
+    // device form; the hardware the guest sees is the same virtio-blk-pci.
+    assert!(
+        args.contains("-device virtio-blk-pci,drive=faro-drive-0"),
+        "got: {}",
+        args
+    );
+    assert!(!args.contains("if=virtio"));
+    // An IDE disk without a boot index keeps the form QEMU allocates itself,
+    // which is the only one that works on every machine type.
     assert!(args.contains("if=ide"));
     assert!(
         !args.contains("faro-ahci"),
@@ -276,10 +290,53 @@ fn test_virtio_and_ide_keep_the_short_form() {
     );
 }
 
+#[test]
+fn test_a_boot_index_on_an_ide_disk_moves_the_group_onto_explicit_devices() {
+    let mut first = drive("a.qcow2", DriveInterface::Ide);
+    first.boot_index = Some(0);
+    let drives = [first, drive("b.qcow2", DriveInterface::Ide)];
+
+    // q35's controller is AHCI: one unit per bus.
+    let args = build_drive_args(&drives, "q35").0.join(" ");
+    assert!(
+        args.contains("-device ide-hd,drive=faro-drive-0,bus=ide.0,unit=0,bootindex=0"),
+        "got: {}",
+        args
+    );
+    assert!(args.contains("-device ide-hd,drive=faro-drive-1,bus=ide.1,unit=0"));
+    assert!(
+        !args.contains("if=ide"),
+        "mixing the forms makes the two fight over the same slot"
+    );
+
+    // The i440fx machines keep the PIIX pair: two units per bus.
+    let args = build_drive_args(&drives, "pc").0.join(" ");
+    assert!(
+        args.contains("-device ide-hd,drive=faro-drive-1,bus=ide.0,unit=1"),
+        "got: {}",
+        args
+    );
+}
+
+#[test]
+fn test_cdroms_follow_the_disks_onto_explicit_devices() {
+    let mut booting = drive("a.qcow2", DriveInterface::Ide);
+    booting.boot_index = Some(0);
+    let (_, mut ide) = build_drive_args(&[booting], "q35");
+    assert!(ide.is_explicit());
+
+    let args = build_cdrom_args(&[PathBuf::from("x.iso")], &mut ide).join(" ");
+    assert!(
+        args.contains("-device ide-cd,drive=faro-cdrom-0,bus=ide.1,unit=0"),
+        "a CD-ROM left on the short form would claim a slot the disk holds, got: {}",
+        args
+    );
+}
+
 // Review Focus 1
 #[test]
 fn test_three_sata_drives_share_one_controller_with_distinct_buses() {
-    let args = build_drive_args(&[
+    let args = drive_args(&[
         drive("a.qcow2", DriveInterface::Sata),
         drive("b.qcow2", DriveInterface::Sata),
         drive("c.qcow2", DriveInterface::Sata),
@@ -294,7 +351,7 @@ fn test_three_sata_drives_share_one_controller_with_distinct_buses() {
 // Review Focus 2
 #[test]
 fn test_all_five_interfaces_in_one_vm_do_not_collide() {
-    let args = build_drive_args(&[
+    let args = drive_args(&[
         drive("a.qcow2", DriveInterface::VirtIO),
         drive("b.qcow2", DriveInterface::Sata),
         drive("c.qcow2", DriveInterface::Nvme),
@@ -321,7 +378,7 @@ fn test_all_five_interfaces_in_one_vm_do_not_collide() {
 // Review Focus 3
 #[test]
 fn test_a_path_with_a_comma_does_not_split_the_drive_option() {
-    let args = build_drive_args(&[drive(r"C:\My VMs\disk,1.qcow2", DriveInterface::VirtIO)]);
+    let args = drive_args(&[drive(r"C:\My VMs\disk,1.qcow2", DriveInterface::VirtIO)]);
     let spec = args
         .iter()
         .find(|a| a.contains("disk"))
@@ -339,19 +396,27 @@ fn test_a_path_with_a_comma_does_not_split_the_drive_option() {
 
 #[test]
 fn test_two_isos_become_two_cdrom_drives() {
-    let args = build_cdrom_args(&[PathBuf::from("a.iso"), PathBuf::from("b.iso")]).join(" ");
+    let args = build_cdrom_args(
+        &[PathBuf::from("a.iso"), PathBuf::from("b.iso")],
+        &mut IdeLayout::new("q35"),
+    )
+    .join(" ");
     assert_eq!(args.matches("media=cdrom").count(), 2, "got: {}", args);
-    assert!(args.contains("index=2"));
-    assert!(args.contains("index=3"));
     assert!(
         !args.contains("-cdrom"),
         "two -cdrom flags make QEMU refuse to start"
+    );
+    // A fixed index collides with IDE disks, which occupy the same slots.
+    assert!(
+        !args.contains("index="),
+        "QEMU hands out the free slot itself, got: {}",
+        args
     );
 }
 
 #[test]
 fn test_empty_iso_paths_are_skipped() {
-    assert!(build_cdrom_args(&[PathBuf::new()]).is_empty());
+    assert!(build_cdrom_args(&[PathBuf::new()], &mut IdeLayout::new("q35")).is_empty());
 }
 
 #[test]
