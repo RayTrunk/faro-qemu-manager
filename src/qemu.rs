@@ -1,4 +1,4 @@
-use crate::config::{Accelerator, Arch, DriveFormat, VmConfig};
+use crate::config::{Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, VmConfig};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -300,6 +300,158 @@ pub fn probe_capabilities(binary: &Path) -> QemuCapabilities {
     }
 }
 
+/// Escape a value inside a QEMU option list.
+///
+/// A comma separates options, so a comma that belongs to the value — a path
+/// like `C:\My VMs\disk,1.qcow2` — must be doubled or QEMU reads the tail as
+/// another option and the drive specification falls apart.
+fn escape_opt_value(value: &str) -> String {
+    value.replace(',', ",,")
+}
+
+/// Prefix for every identifier this builder invents, so they cannot collide
+/// with anything the user wrote into `extra_args`.
+const ID_PREFIX: &str = "faro";
+
+/// Append an anonymous backing drive for a device-attached disk.
+fn push_backing_drive(args: &mut Vec<String>, file: &str, format: &str, id: &str) {
+    args.push("-drive".to_string());
+    args.push(format!("file={},format={},if=none,id={}", file, format, id));
+}
+
+fn append_bootindex(device: &mut String, boot_index: Option<u32>) {
+    if let Some(index) = boot_index {
+        device.push_str(&format!(",bootindex={}", index));
+    }
+}
+
+/// Build the drive arguments for a VM.
+///
+/// `virtio` and `ide` are bus types QEMU really has, and keep the short
+/// `if=` form. `sata`, `nvme` and `scsi` are not: QEMU rejects `if=sata` and
+/// `if=nvme` as unsupported bus types and refuses `if=scsi` on q35 outright.
+/// Those get an anonymous backing drive plus an explicit device, and their
+/// controller is added once however many disks hang off it.
+pub fn build_drive_args(drives: &[DriveConfig]) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut ahci_added = false;
+    let mut scsi_added = false;
+    let mut ahci_unit = 0u32;
+    let mut scsi_unit = 0u32;
+
+    for (idx, drive) in drives.iter().enumerate() {
+        let file = escape_opt_value(&drive.path.display().to_string());
+        let format = drive.format.as_str();
+        let id = format!("{}-drive-{}", ID_PREFIX, idx);
+
+        match drive.interface {
+            DriveInterface::VirtIO | DriveInterface::Ide => {
+                let mut spec = format!(
+                    "file={},format={},if={}",
+                    file,
+                    format,
+                    drive.interface.as_str()
+                );
+                if let Some(index) = drive.boot_index {
+                    spec.push_str(&format!(",bootindex={}", index));
+                }
+                args.push("-drive".to_string());
+                args.push(spec);
+            }
+
+            DriveInterface::Sata => {
+                if !ahci_added {
+                    args.push("-device".to_string());
+                    args.push(format!("ahci,id={}-ahci", ID_PREFIX));
+                    ahci_added = true;
+                }
+                push_backing_drive(&mut args, &file, format, &id);
+                let mut device =
+                    format!("ide-hd,drive={},bus={}-ahci.{}", id, ID_PREFIX, ahci_unit);
+                append_bootindex(&mut device, drive.boot_index);
+                args.push("-device".to_string());
+                args.push(device);
+                ahci_unit += 1;
+            }
+
+            DriveInterface::Nvme => {
+                push_backing_drive(&mut args, &file, format, &id);
+                // QEMU refuses an nvme device that has no serial.
+                let mut device = format!("nvme,drive={},serial={}-{}", id, ID_PREFIX, idx);
+                append_bootindex(&mut device, drive.boot_index);
+                args.push("-device".to_string());
+                args.push(device);
+            }
+
+            DriveInterface::Scsi => {
+                if !scsi_added {
+                    args.push("-device".to_string());
+                    args.push(format!("virtio-scsi-pci,id={}-scsi", ID_PREFIX));
+                    scsi_added = true;
+                }
+                push_backing_drive(&mut args, &file, format, &id);
+                let mut device =
+                    format!("scsi-hd,drive={},bus={}-scsi.{}", id, ID_PREFIX, scsi_unit);
+                append_bootindex(&mut device, drive.boot_index);
+                args.push("-device".to_string());
+                args.push(device);
+                scsi_unit += 1;
+            }
+        }
+    }
+
+    args
+}
+
+/// Build the CD-ROM arguments for a VM.
+pub fn build_cdrom_args(cdroms: &[PathBuf]) -> Vec<String> {
+    let mut args = Vec::new();
+    for cdrom in cdroms {
+        if !cdrom.as_os_str().is_empty() {
+            args.push("-cdrom".to_string());
+            args.push(cdrom.display().to_string());
+        }
+    }
+    args
+}
+
+/// Build the network arguments for a VM.
+pub fn build_network_args(net: &crate::config::NetworkConfig) -> Vec<String> {
+    let mut args = Vec::new();
+
+    let backend = if net.backend.trim().is_empty() {
+        "user"
+    } else {
+        net.backend.trim()
+    };
+
+    if backend.eq_ignore_ascii_case("none") {
+        args.push("-nic".to_string());
+        args.push("none".to_string());
+        return args;
+    }
+
+    let mut netdev = format!("{},id=net0", backend);
+    for rule in &net.port_forwards {
+        netdev.push_str(&format!(
+            ",hostfwd={}::{}-:{}",
+            rule.proto, rule.host_port, rule.guest_port
+        ));
+    }
+    args.push("-netdev".to_string());
+    args.push(netdev);
+
+    let nic = if net.nic_model.trim().is_empty() {
+        "virtio-net-pci"
+    } else {
+        net.nic_model.trim()
+    };
+    args.push("-device".to_string());
+    args.push(format!("{},netdev=net0", nic));
+
+    args
+}
+
 /// Construct command-line arguments to launch QEMU for the given `VmConfig`.
 pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
     let mut args = Vec::new();
@@ -338,27 +490,10 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
     }
 
     // 4. Drives
-    for drive in &vm.drives {
-        let mut drive_spec = format!(
-            "file={},format={},if={}",
-            drive.path.display(),
-            drive.format.as_str(),
-            drive.interface.as_str()
-        );
-        if let Some(boot_idx) = drive.boot_index {
-            drive_spec.push_str(&format!(",bootindex={}", boot_idx));
-        }
-        args.push("-drive".to_string());
-        args.push(drive_spec);
-    }
+    args.extend(build_drive_args(&vm.drives));
 
     // 5. CD-ROMs
-    for cdrom in &vm.cdroms {
-        if !cdrom.as_os_str().is_empty() {
-            args.push("-cdrom".to_string());
-            args.push(cdrom.display().to_string());
-        }
-    }
+    args.extend(build_cdrom_args(&vm.cdroms));
 
     // 6. BIOS / UEFI
     if let Some(bios) = &vm.bios_uefi {
@@ -413,34 +548,7 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
     }
 
     // 8. Network configuration
-    let backend = if vm.network.backend.trim().is_empty() {
-        "user"
-    } else {
-        vm.network.backend.trim()
-    };
-
-    if backend.eq_ignore_ascii_case("none") {
-        args.push("-nic".to_string());
-        args.push("none".to_string());
-    } else {
-        let mut netdev = format!("{},id=net0", backend);
-        for rule in &vm.network.port_forwards {
-            netdev.push_str(&format!(
-                ",hostfwd={}::{}-:{}",
-                rule.proto, rule.host_port, rule.guest_port
-            ));
-        }
-        args.push("-netdev".to_string());
-        args.push(netdev);
-
-        let nic = if vm.network.nic_model.trim().is_empty() {
-            "virtio-net-pci"
-        } else {
-            vm.network.nic_model.trim()
-        };
-        args.push("-device".to_string());
-        args.push(format!("{},netdev=net0", nic));
-    }
+    args.extend(build_network_args(&vm.network));
 
     // 9. Extra arguments (parsed with shell escaping)
     if !vm.extra_args.trim().is_empty() {

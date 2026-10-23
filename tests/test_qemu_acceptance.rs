@@ -4,7 +4,8 @@
 mod common;
 
 use common::{qemu_accepts, Acceptance};
-use faro_qem::config::Arch;
+use faro_qem::config::{Arch, DriveConfig, DriveFormat, DriveInterface, VmConfig};
+use faro_qem::qemu::build_qemu_args;
 
 #[test]
 fn test_the_probe_can_tell_good_arguments_from_bad() {
@@ -31,5 +32,24 @@ fn test_the_probe_can_tell_good_arguments_from_bad() {
             first_line
         ),
         Acceptance::Accepted => panic!("if=sata must be rejected — the probe has no teeth"),
+    }
+}
+
+#[test]
+fn test_qemu_accepts_every_drive_interface() {
+    let dir = tempfile::tempdir().unwrap();
+    for iface in DriveInterface::all() {
+        let disk = dir.path().join(format!("{}.qcow2", iface.as_str()));
+        common::make_empty_qcow2(&disk);
+
+        let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+        vm.drives.push(DriveConfig {
+            path: disk,
+            format: DriveFormat::Qcow2,
+            interface: *iface,
+            boot_index: None,
+        });
+
+        common::assert_accepted(iface.as_str(), Arch::X86_64, &build_qemu_args(&vm));
     }
 }

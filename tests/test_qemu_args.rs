@@ -1,8 +1,11 @@
 use faro_qem::config::{
-    Accelerator, Arch, DisplayConfig, DriveConfig, DriveFormat, DriveInterface, PortForwardRule,
-    VmConfig,
+    Accelerator, Arch, DisplayConfig, DriveConfig, DriveFormat, DriveInterface, NetworkConfig,
+    PortForwardRule, VmConfig,
 };
-use faro_qem::qemu::{build_qemu_args, create_disk_image, find_qemu_binary, find_qemu_img};
+use faro_qem::qemu::{
+    build_cdrom_args, build_drive_args, build_network_args, build_qemu_args, create_disk_image,
+    find_qemu_binary, find_qemu_img,
+};
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -203,5 +206,125 @@ fn test_build_qemu_args_mouse_tablet_and_show_cursor() {
     assert!(
         joined.contains("-display default,show-cursor=on"),
         "Must enable show-cursor for desktop GUI"
+    );
+}
+
+// --------------------------------------------------------------------------
+// Part 2: drives are attached through real devices, not invented bus types
+// --------------------------------------------------------------------------
+
+fn drive(path: &str, iface: DriveInterface) -> DriveConfig {
+    DriveConfig {
+        path: PathBuf::from(path),
+        format: DriveFormat::Qcow2,
+        interface: iface,
+        boot_index: None,
+    }
+}
+
+#[test]
+fn test_sata_drive_uses_an_ahci_controller() {
+    let args = build_drive_args(&[drive("d.qcow2", DriveInterface::Sata)]).join(" ");
+    assert!(args.contains("-device ahci,id=faro-ahci"), "got: {}", args);
+    assert!(args.contains("if=none,id=faro-drive-0"));
+    assert!(args.contains("-device ide-hd,drive=faro-drive-0,bus=faro-ahci.0"));
+    assert!(
+        !args.contains("if=sata"),
+        "if=sata is not a bus type QEMU has"
+    );
+}
+
+#[test]
+fn test_nvme_drive_gets_the_serial_qemu_demands() {
+    let args = build_drive_args(&[drive("d.qcow2", DriveInterface::Nvme)]).join(" ");
+    assert!(
+        args.contains("-device nvme,drive=faro-drive-0,serial="),
+        "got: {}",
+        args
+    );
+    assert!(!args.contains("if=nvme"));
+}
+
+#[test]
+fn test_scsi_drive_uses_a_virtio_scsi_controller() {
+    let args = build_drive_args(&[drive("d.qcow2", DriveInterface::Scsi)]).join(" ");
+    assert!(
+        args.contains("-device virtio-scsi-pci,id=faro-scsi"),
+        "got: {}",
+        args
+    );
+    assert!(args.contains("-device scsi-hd,drive=faro-drive-0,bus=faro-scsi.0"));
+    assert!(!args.contains("if=scsi"), "if=scsi is rejected on q35");
+}
+
+#[test]
+fn test_virtio_and_ide_keep_the_short_form() {
+    let args = build_drive_args(&[
+        drive("a.qcow2", DriveInterface::VirtIO),
+        drive("b.qcow2", DriveInterface::Ide),
+    ])
+    .join(" ");
+    assert!(args.contains("if=virtio"));
+    assert!(args.contains("if=ide"));
+    assert!(
+        !args.contains("faro-ahci"),
+        "no controller is needed for these"
+    );
+}
+
+// Review Focus 1
+#[test]
+fn test_three_sata_drives_share_one_controller_with_distinct_buses() {
+    let args = build_drive_args(&[
+        drive("a.qcow2", DriveInterface::Sata),
+        drive("b.qcow2", DriveInterface::Sata),
+        drive("c.qcow2", DriveInterface::Sata),
+    ])
+    .join(" ");
+    assert_eq!(args.matches("-device ahci,id=faro-ahci").count(), 1);
+    for bus in ["faro-ahci.0", "faro-ahci.1", "faro-ahci.2"] {
+        assert!(args.contains(bus), "missing {} in {}", bus, args);
+    }
+}
+
+// Review Focus 2
+#[test]
+fn test_all_five_interfaces_in_one_vm_do_not_collide() {
+    let args = build_drive_args(&[
+        drive("a.qcow2", DriveInterface::VirtIO),
+        drive("b.qcow2", DriveInterface::Sata),
+        drive("c.qcow2", DriveInterface::Nvme),
+        drive("d.qcow2", DriveInterface::Scsi),
+        drive("e.qcow2", DriveInterface::Ide),
+    ]);
+    let joined = args.join(" ");
+    assert_eq!(joined.matches("-device ahci,").count(), 1);
+    assert_eq!(joined.matches("-device virtio-scsi-pci,").count(), 1);
+
+    let ids: Vec<&String> = args
+        .iter()
+        .filter(|a| a.contains("id=faro-drive-"))
+        .collect();
+    let unique: std::collections::HashSet<&&String> = ids.iter().collect();
+    assert_eq!(
+        ids.len(),
+        unique.len(),
+        "drive ids must be unique: {:?}",
+        ids
+    );
+}
+
+// Review Focus 3
+#[test]
+fn test_a_path_with_a_comma_does_not_split_the_drive_option() {
+    let args = build_drive_args(&[drive(r"C:\My VMs\disk,1.qcow2", DriveInterface::VirtIO)]);
+    let spec = args
+        .iter()
+        .find(|a| a.contains("disk"))
+        .expect("the drive spec is there");
+    assert!(
+        spec.contains("disk,,1.qcow2"),
+        "a comma in a path must be escaped by doubling it, got: {}",
+        spec
     );
 }
