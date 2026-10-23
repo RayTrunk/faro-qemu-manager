@@ -343,6 +343,13 @@ pub struct VmConfig {
     pub network: NetworkConfig,
     #[serde(default)]
     pub extra_args: String,
+    /// Key of the template this machine started from, if any.
+    ///
+    /// Descriptive only. Nothing reads it to decide behaviour — a template is
+    /// a starting assignment, and after creation this is an ordinary machine.
+    /// It is kept so a later hint can mention where the machine came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 impl VmConfig {
@@ -364,6 +371,7 @@ impl VmConfig {
             display: DisplayConfig::default(),
             network: NetworkConfig::default(),
             extra_args: String::new(),
+            template: None,
         }
     }
 }

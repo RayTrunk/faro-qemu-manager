@@ -157,3 +157,17 @@ pub fn rendered_text(output: &egui::FullOutput) -> String {
     }
     out
 }
+
+/// Keys present in one locale catalogue, read from the file.
+///
+/// `I18n::t` falls back to English for a missing key, so asking it whether a
+/// key "exists" cannot tell a German entry apart from an English one standing
+/// in for it. The files are the only honest source.
+pub fn catalogue_keys(lang: &str) -> std::collections::BTreeSet<String> {
+    let path = format!("assets/locales/{}.json", lang);
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {}", path, e));
+    let map: std::collections::BTreeMap<String, String> = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("{} is not a catalogue: {}", path, e));
+    map.into_keys().collect()
+}
