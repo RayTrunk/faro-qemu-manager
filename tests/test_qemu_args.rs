@@ -83,7 +83,10 @@ fn test_build_qemu_args_all_components() {
     // An ISO is its own CD-ROM drive now: -cdrom cannot be given twice, so it
     // cannot be the construction when more than one ISO is allowed.
     assert!(joined.contains("media=cdrom,file=/path/to/install.iso"));
-    assert!(joined.contains("-vga virtio"));
+    // This machine is aarch64, where there is no VGA adapter at all: the
+    // assertion used to read "-vga virtio", which QEMU rejects outright.
+    assert!(joined.contains("-device virtio-gpu-pci"), "got: {}", joined);
+    assert!(!joined.contains("-vga"));
     assert!(joined.contains("-display default"));
     assert!(joined.contains("-full-screen"));
 }
@@ -517,4 +520,43 @@ fn test_a_uefi_machine_without_firmware_is_refused_not_built_as_bios() {
         .expect_err("a quiet BIOS fallback installs a guest that can never boot again");
     assert!(err.contains("UEFI"), "got: {}", err);
     assert!(err.contains("Windows 11"), "name the machine, got: {}", err);
+}
+
+// Important 8
+#[test]
+fn test_graphics_outside_x86_are_a_device_not_a_vga_type() {
+    let mut vm = VmConfig::new_default("Alpine ARM", Arch::Aarch64);
+    vm.display.vga_type = "virtio-vga".to_string();
+    let joined = build_qemu_args(&vm, None).unwrap().join(" ");
+    assert!(
+        !joined.contains("-vga virtio"),
+        "QEMU answers: Virtio VGA not available. Got: {}",
+        joined
+    );
+    assert!(
+        joined.contains("-device virtio-gpu-pci"),
+        "virtio graphics outside x86 is a plain PCI device, got: {}",
+        joined
+    );
+
+    // x86 keeps the short form it has always used.
+    let mut vm = VmConfig::new_default("Debian", Arch::X86_64);
+    vm.display.vga_type = "virtio-vga".to_string();
+    let joined = build_qemu_args(&vm, None).unwrap().join(" ");
+    assert!(joined.contains("-vga virtio"), "got: {}", joined);
+}
+
+// Minor 14
+#[test]
+fn test_a_help_flag_the_binary_rejects_yields_no_capabilities() {
+    // This test binary is not QEMU: it rejects every -X help flag and exits
+    // non-zero. Reading its complaints as option names would make the list
+    // non-empty, and a non-empty list counts as authoritative.
+    let not_qemu = std::env::current_exe().expect("the test binary has a path");
+    let caps = faro_qem::qemu::probe_capabilities(&not_qemu);
+    assert!(
+        !caps.was_probed(),
+        "error text is not a list of options: {:?}",
+        caps
+    );
 }

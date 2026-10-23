@@ -14,8 +14,20 @@ use crate::qemu::{create_disk_image, find_qemu_img, nvram_path_for, QemuCapabili
 use crate::ui::console::{ConsoleLogBuffer, ConsoleView};
 use crate::ui::theme::{
     card_frame, danger_button, icons, section_header, status_badge, COLOR_ERROR, COLOR_PRIMARY,
-    COLOR_RUNNING, COLOR_STOPPED, ROUNDING_BUTTON,
+    COLOR_RUNNING, COLOR_STOPPED, COLOR_WARNING, ROUNDING_BUTTON,
 };
+
+/// Graphics adapters worth offering for `arch`.
+///
+/// `-vga` and its named types are an x86 convenience. On every other
+/// architecture QEMU has no VGA adapter and answers `Virtio VGA not
+/// available`, so only the virtio device and no graphics at all are left.
+pub fn offered_vga_types(arch: Arch) -> Vec<&'static str> {
+    match arch {
+        Arch::X86_64 | Arch::I386 => vec!["virtio-vga", "std", "qxl", "cirrus", "none"],
+        _ => vec!["virtio-vga", "none"],
+    }
+}
 
 /// Network backends worth offering for these capabilities.
 ///
@@ -586,6 +598,15 @@ impl<'a> VmDetailView<'a> {
                                 self.vm.machine_type = machine.to_string();
                             }
                         }
+                        if !self.capabilities.is_some_and(|c| c.was_probed()) {
+                            // Nothing was filtered, so nothing here is known
+                            // to work. Better said than silently implied.
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("option_unverified"))
+                                    .size(11.0)
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                        }
                     });
                     ui.end_row();
 
@@ -603,6 +624,15 @@ impl<'a> VmDetailView<'a> {
                                     );
                                 }
                             });
+                        if !offered_accelerators().contains(&self.vm.accel) {
+                            // A stored value this build cannot use is kept,
+                            // not quietly rewritten — so it has to be marked.
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("option_substituted"))
+                                    .size(11.0)
+                                    .color(COLOR_WARNING),
+                            );
+                        }
                         let hint = match self.vm.accel {
                             Accelerator::Auto => {
                                 if cfg!(target_os = "windows") {
@@ -995,7 +1025,7 @@ impl<'a> VmDetailView<'a> {
                     // VGA Type
                     ui.label(egui::RichText::new(self.i18n.t("vga_type")).strong());
                     ui.horizontal(|ui| {
-                        let vga_options = ["virtio-vga", "std", "qxl", "cirrus", "none"];
+                        let vga_options = offered_vga_types(self.vm.arch);
                         egui::ComboBox::from_id_salt("detail_vga_combo")
                             .selected_text(&self.vm.display.vga_type)
                             .show_ui(ui, |ui| {
@@ -1093,7 +1123,6 @@ impl<'a> VmDetailView<'a> {
                             });
                         let hint = match self.vm.network.backend.as_str() {
                             "user" => "(SLIRP NAT user-mode network with Internet access)",
-                            "tap" => "(Host TAP virtual network interface)",
                             "bridge" => "(Host bridged interface)",
                             "none" => "(No network connectivity)",
                             _ => "",
@@ -1104,6 +1133,17 @@ impl<'a> VmDetailView<'a> {
                                 .color(ui.visuals().weak_text_color()),
                         );
                     });
+                    if !self.vm.network.port_forwards.is_empty()
+                        && !self.vm.network.backend.eq_ignore_ascii_case("user")
+                    {
+                        // The rules stay in the configuration, so say plainly
+                        // that this backend will not act on them.
+                        ui.label(
+                            egui::RichText::new(self.i18n.t("forwards_backend_only"))
+                                .size(11.0)
+                                .color(COLOR_WARNING),
+                        );
+                    }
                     ui.end_row();
 
                     // NIC model

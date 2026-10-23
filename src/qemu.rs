@@ -243,6 +243,12 @@ fn query_help(binary: &Path, flag: &str) -> Vec<String> {
     let Ok(output) = cmd.output() else {
         return Vec::new();
     };
+    // A binary that rejects the flag writes complaints, not names. Reading
+    // those as options would make the list non-empty — and a non-empty list
+    // counts as authoritative, which is the exact inversion to avoid.
+    if !output.status.success() {
+        return Vec::new();
+    }
 
     let text = format!(
         "{}{}",
@@ -300,7 +306,7 @@ fn quoted_values_after(line: &str, marker: &str) -> Vec<String> {
 /// Ask `binary` what it supports. Each query runs exactly once.
 ///
 /// Call this when the QEMU directory is chosen or changed, and keep the result
-/// — it spawns four processes and must never run as part of drawing a frame.
+/// — it spawns five processes and must never run as part of drawing a frame.
 pub fn probe_capabilities(binary: &Path) -> QemuCapabilities {
     QemuCapabilities {
         machines: query_help(binary, "-machine"),
@@ -686,6 +692,39 @@ pub fn build_firmware_args(fw: &Firmware, uefi: Option<&UefiFirmware>) -> Vec<St
     }
 }
 
+/// Build the graphics arguments for `arch`.
+///
+/// `-vga` is an x86 convenience. Elsewhere QEMU has no VGA adapter at all and
+/// answers `Virtio VGA not available`, so the adapter is a plain PCI device —
+/// and an old configuration naming the x86 spelling means the same hardware,
+/// so it is translated rather than refused.
+fn build_vga_args(arch: Arch, vga_type: &str) -> Vec<String> {
+    if vga_type.is_empty() {
+        return Vec::new();
+    }
+    if vga_type.eq_ignore_ascii_case("none") {
+        return vec!["-vga".to_string(), "none".to_string()];
+    }
+    match arch {
+        Arch::X86_64 | Arch::I386 => {
+            let name = if vga_type.eq_ignore_ascii_case("virtio-vga") {
+                "virtio"
+            } else {
+                vga_type
+            };
+            vec!["-vga".to_string(), name.to_string()]
+        }
+        _ => {
+            let device = if vga_type.eq_ignore_ascii_case("virtio-vga") {
+                "virtio-gpu-pci"
+            } else {
+                vga_type
+            };
+            vec!["-device".to_string(), device.to_string()]
+        }
+    }
+}
+
 /// Construct command-line arguments to launch QEMU for the given `VmConfig`.
 ///
 /// `uefi` is the firmware pair the caller resolved, which is also how the
@@ -751,18 +790,7 @@ pub fn build_qemu_args(vm: &VmConfig, uefi: Option<&UefiFirmware>) -> Result<Vec
 
     // 7. Display and VGA
     let vga_type = vm.display.vga_type.trim();
-    if vga_type.eq_ignore_ascii_case("none") {
-        args.push("-vga".to_string());
-        args.push("none".to_string());
-    } else if !vga_type.is_empty() {
-        let vga = if vga_type.eq_ignore_ascii_case("virtio-vga") {
-            "virtio"
-        } else {
-            vga_type
-        };
-        args.push("-vga".to_string());
-        args.push(vga.to_string());
-    }
+    args.extend(build_vga_args(vm.arch, vga_type));
 
     let display_backend = vm.display.display_backend.trim();
     if !display_backend.is_empty() {
@@ -785,10 +813,19 @@ pub fn build_qemu_args(vm: &VmConfig, uefi: Option<&UefiFirmware>) -> Result<Vec
         args.push("-full-screen".to_string());
     }
 
-    // Absolute pointing device (USB tablet) so the mouse cursor is always visible and synced
+    // Absolute pointing device (USB tablet) so the mouse cursor is always
+    // visible and synced. `-usb` adds a controller on the x86 machines only;
+    // elsewhere QEMU answers "No 'usb-bus' bus found for device 'usb-tablet'",
+    // so the controller is named explicitly.
     let has_tablet = vm.extra_args.contains("tablet") || vm.extra_args.contains("mouse");
     if !has_tablet && !vga_type.eq_ignore_ascii_case("none") {
-        args.push("-usb".to_string());
+        match vm.arch {
+            Arch::X86_64 | Arch::I386 => args.push("-usb".to_string()),
+            _ => {
+                args.push("-device".to_string());
+                args.push("qemu-xhci".to_string());
+            }
+        }
         args.push("-device".to_string());
         args.push("usb-tablet".to_string());
     }

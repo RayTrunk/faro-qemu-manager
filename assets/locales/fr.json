@@ -96,5 +96,6 @@
   "firmware_missing": "Aucun micrologiciel UEFI trouvé auprès de QEMU. Cette VM ne peut pas démarrer tant qu'il manque.",
   "firmware_uefi_hint": "Exigé par Windows 11. Chaque VM conserve son propre stockage de variables afin de préserver ses entrées de démarrage.",
   "option_unverified": "non vérifié — QEMU n'a pas été interrogé",
+  "option_substituted": "non disponible — un autre accélérateur est utilisé au démarrage",
   "forwards_backend_only": "La redirection de ports ne fonctionne qu'avec le réseau en mode utilisateur. Ces règles sont conservées mais non appliquées."
 }

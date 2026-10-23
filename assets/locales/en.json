@@ -96,5 +96,6 @@
   "firmware_missing": "No UEFI firmware found next to QEMU. This VM cannot start until it is available.",
   "firmware_uefi_hint": "Required by Windows 11. Each VM keeps its own variable store so its boot entries survive.",
   "option_unverified": "unverified — QEMU was not asked",
+  "option_substituted": "not available — another accelerator is used at start",
   "forwards_backend_only": "Port forwarding works with user-mode networking only. These rules are kept but not applied."
 }

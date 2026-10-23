@@ -411,3 +411,31 @@ fn test_qemu_accepts_boot_indexed_ide_disks_on_both_x86_machines() {
         }
     }
 }
+
+// --------------------------------------------------------------------------
+// Architectures other than x86
+//
+// Every probe above runs on x86_64, and the UI offers five architectures.
+// -vga is an x86 convenience: elsewhere QEMU answers "Virtio VGA not
+// available" and the machine never starts.
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_qemu_accepts_the_arguments_built_for_a_non_x86_machine() {
+    let dir = tempfile::tempdir().unwrap();
+    for arch in [Arch::Aarch64, Arch::Arm, Arch::Riscv64] {
+        let disk = dir.path().join(format!("{}.qcow2", arch.as_str()));
+        common::make_empty_qcow2(&disk);
+
+        let mut vm = VmConfig::new_default("probe", arch);
+        vm.memory_mb = PROBE_MEMORY_MB;
+        vm.accel = faro_qem::config::Accelerator::TCG;
+        vm.drives.push(DriveConfig {
+            path: disk,
+            format: DriveFormat::Qcow2,
+            interface: DriveInterface::VirtIO,
+            boot_index: None,
+        });
+        common::assert_accepted(arch.as_str(), arch, &args_for(&vm));
+    }
+}

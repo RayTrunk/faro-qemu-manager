@@ -96,5 +96,6 @@
   "firmware_missing": "Neben QEMU wurde keine UEFI-Firmware gefunden. Diese VM kann erst starten, wenn sie vorliegt.",
   "firmware_uefi_hint": "Von Windows 11 verlangt. Jede VM behält ihren eigenen Variablenspeicher, damit ihre Booteinträge erhalten bleiben.",
   "option_unverified": "ungeprüft — QEMU wurde nicht gefragt",
+  "option_substituted": "nicht verfügbar — beim Start wird eine andere Beschleunigung verwendet",
   "forwards_backend_only": "Portweiterleitung funktioniert nur mit Benutzermodus-Netzwerk. Diese Regeln bleiben gespeichert, greifen aber nicht."
 }

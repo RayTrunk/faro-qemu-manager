@@ -83,7 +83,9 @@ fn test_vm_detail_system_tab_rendering() {
     vm.cpu_cores = 4;
     vm.memory_mb = 4096;
     vm.accel = Accelerator::WHPX;
-    vm.bios_uefi = Some(PathBuf::from(r"C:\Firmware\OVMF.fd"));
+    vm.firmware = Firmware::Bios {
+        rom: Some(PathBuf::from(r"C:\Firmware\OVMF.fd")),
+    };
 
     let mut active_tab = DetailTab::System;
     let mut disk_modal = CreateDiskState::default();
@@ -550,4 +552,95 @@ fn test_the_missing_firmware_hint_follows_what_the_app_resolved() {
             drawn
         );
     }
+}
+
+// Important 9
+#[test]
+fn test_port_forwards_say_so_when_the_backend_cannot_apply_them() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    vm.network.backend = "none".to_string();
+    vm.network.port_forwards.push(PortForwardRule {
+        host_port: 2222,
+        guest_port: 22,
+        proto: "tcp".to_string(),
+    });
+    let mut active = DetailTab::Network;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&caps)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains(i18n.t("forwards_backend_only")),
+        "rules that cannot apply must say so, drew:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_unprobed_options_are_marked_as_unverified() {
+    let i18n = I18n::new("en");
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+
+    // An unprobed capability set permits everything, so the lists are not
+    // filtered. The user is told that rather than left to assume they were.
+    let unprobed = QemuCapabilities::default();
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&unprobed)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains(i18n.t("option_unverified")),
+        "drew:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_a_stored_accelerator_that_is_gone_is_marked_not_silently_replaced() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    // HAXM is absent from modern Windows builds and is bent to WHPX at
+    // start. The stored value stays, so it has to be labelled.
+    vm.accel = Accelerator::HAXM;
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&caps)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains(i18n.t("option_substituted")),
+        "drew:\n{}",
+        drawn
+    );
 }
