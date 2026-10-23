@@ -385,6 +385,19 @@ pub struct AppSettings {
     pub theme: String,
     #[serde(default)]
     pub default_arch: Arch,
+    /// Where this installation keeps its VM folders.
+    ///
+    /// Unset means "use [`default_vm_dir`]", not a frozen copy of it: a user
+    /// who never chose a directory follows the default when it changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vm_dir: Option<PathBuf>,
+}
+
+impl AppSettings {
+    /// The VM directory in use, chosen or default.
+    pub fn vm_dir_or_default(&self) -> PathBuf {
+        self.vm_dir.clone().unwrap_or_else(default_vm_dir)
+    }
 }
 
 fn default_language() -> String {
@@ -402,6 +415,7 @@ impl Default for AppSettings {
             language: default_language(),
             theme: default_theme(),
             default_arch: Arch::X86_64,
+            vm_dir: None,
         }
     }
 }
@@ -434,6 +448,111 @@ pub fn default_vms_path() -> PathBuf {
 /// Resolve the default path for `settings.json`
 pub fn default_settings_path() -> PathBuf {
     default_config_dir().join("settings.json")
+}
+
+/// Where VM folders go when the user has not chosen a directory.
+///
+/// This has to be an absolute path. A relative one would put 64 GB disk
+/// images wherever the app happened to be launched from — there is a stray
+/// `debian_12.qcow2` in the project directory from exactly that.
+pub fn default_vm_dir() -> PathBuf {
+    const FOLDER: &str = "FARO-VMs";
+
+    #[cfg(target_os = "windows")]
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(profile).join(FOLDER);
+    }
+    #[cfg(not(target_os = "windows"))]
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(FOLDER);
+    }
+
+    let config = default_config_dir();
+    if config.is_absolute() {
+        return config.join(FOLDER);
+    }
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(FOLDER)
+}
+
+/// Names Windows refuses as a file or folder, whatever the extension.
+const RESERVED_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// A folder name for a VM called `name`.
+///
+/// A VM name is free text: it can hold path separators, drive colons,
+/// wildcards, nothing but dots, or one of the device names Windows reserves.
+/// None of those can be a folder, and a name is no reason to refuse to create
+/// a machine — so whatever cannot be used is replaced, and a name that leaves
+/// nothing behind falls back to the VM's own id.
+pub fn vm_folder_name(name: &str, id: Uuid) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '.' | '_' | '-') {
+            out.push(ch);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    // Collapse the runs the replacement above can create, then drop anything
+    // at the edges that a folder name cannot end on.
+    while out.contains("--") {
+        out = out.replace("--", "-");
+    }
+    let trimmed = out.trim_matches(|c: char| c == '.' || c == '-' || c == ' ');
+
+    let reserved = RESERVED_NAMES
+        .iter()
+        .any(|r| trimmed.eq_ignore_ascii_case(r));
+    if trimmed.is_empty() || reserved {
+        return format!("vm-{}", &id.simple().to_string()[..8]);
+    }
+    trimmed.to_string()
+}
+
+/// Name of the marker file that says which VM owns a folder.
+const OWNER_MARKER: &str = "vm-id";
+
+/// Create and return the folder that belongs to this VM.
+///
+/// Calling it twice for the same VM gives the same folder; calling it for a
+/// second VM of the same name gives a different one. That second part is not
+/// cosmetic: two QEMU processes writing one qcow2 destroy it, so two machines
+/// must never share a folder. Ownership is read from a marker file, because a
+/// folder name on its own does not say whose it is.
+pub fn claim_vm_folder(root: &Path, name: &str, id: Uuid) -> Result<PathBuf, String> {
+    let preferred = root.join(vm_folder_name(name, id));
+    let chosen = if folder_is_free_or_ours(&preferred, id) {
+        preferred
+    } else {
+        root.join(format!(
+            "{}-{}",
+            vm_folder_name(name, id),
+            &id.simple().to_string()[..8]
+        ))
+    };
+
+    std::fs::create_dir_all(&chosen)
+        .map_err(|e| format!("Failed to create {}: {}", chosen.display(), e))?;
+    let marker = chosen.join(OWNER_MARKER);
+    if !marker.exists() {
+        std::fs::write(&marker, id.to_string())
+            .map_err(|e| format!("Failed to write {}: {}", marker.display(), e))?;
+    }
+    Ok(chosen)
+}
+
+/// Whether `folder` can be used by the VM with this `id`.
+fn folder_is_free_or_ours(folder: &Path, id: Uuid) -> bool {
+    if !folder.exists() {
+        return true;
+    }
+    std::fs::read_to_string(folder.join(OWNER_MARKER))
+        .is_ok_and(|owner| owner.trim() == id.to_string())
 }
 
 /// Why a configuration file could not be loaded.

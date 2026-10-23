@@ -265,6 +265,7 @@ fn test_settings_dialog_open_rendering() {
         language: "en".to_string(),
         theme: "dark".to_string(),
         default_arch: Arch::X86_64,
+        vm_dir: None,
     };
     let mut open = true;
 
