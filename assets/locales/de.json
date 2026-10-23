@@ -109,5 +109,15 @@
   "creation_mode": "Beim Anlegen einer Maschine",
   "creation_mode_wizard": "Wizard mit Vorlagen",
   "creation_mode_direct": "Direkt, alles selbst einstellen",
-  "create_failed": "{name} konnte nicht angelegt werden"
+  "create_failed": "{name} konnte nicht angelegt werden",
+  "pf_missing_disk": "Festplattenabbild nicht gefunden: {path}",
+  "pf_missing_iso": "ISO nicht gefunden: {path}",
+  "pf_missing_nvram": "UEFI-Variablenspeicher nicht gefunden: {path}",
+  "pf_missing_firmware": "Firmware nicht gefunden: {path}",
+  "pf_memory_over_host": "{vm} MB sind mehr, als dieser Rechner hat ({host} MB)",
+  "pf_cores_over_host": "{vm} Kerne sind mehr, als dieser Rechner hat ({host})",
+  "pf_accel_substituted": "{stored} ist hier nicht verfuegbar; stattdessen wuerde {replacement} laufen. Bitte bewusst waehlen.",
+  "pf_backend_unavailable": "Dieses QEMU hat kein Netzwerk-Backend {backend}",
+  "pf_machine_unknown": "Dieses QEMU kennt den Maschinentyp {machine} nicht",
+  "pf_too_many_sata": "{count} SATA-Platten, der AHCI-Controller hat aber {ports} Ports"
 }

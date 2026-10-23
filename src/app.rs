@@ -12,6 +12,7 @@ use crate::config::{
     ConfigRecovery, CreationMode, Firmware, VmConfig,
 };
 use crate::i18n::I18n;
+use crate::preflight::{blocks, check_vm, Finding, HostFacts};
 use crate::qemu::{
     build_qemu_args, create_disk_image, find_qemu_binary, find_qemu_img, find_uefi_firmware,
     nvram_path_for, prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent,
@@ -61,6 +62,8 @@ pub struct FaroQemApp {
     pub uefi_firmware: Option<UefiFirmware>,
     /// The template wizard, when the settings take that way.
     pub wizard: WizardState,
+    /// What this host has, asked once. The start check compares against it.
+    pub host: HostFacts,
 }
 
 /// Short, human-facing name for a configuration path.
@@ -260,6 +263,7 @@ impl FaroQemApp {
             capabilities,
             uefi_firmware,
             wizard: WizardState::default(),
+            host: HostFacts::probe(),
         }
     }
 
@@ -360,6 +364,17 @@ impl FaroQemApp {
         self.selected_vm_id = Some(id);
         self.save_vms_now();
         Ok(id)
+    }
+
+    /// Everything worth saying about this machine before it starts.
+    pub fn findings_for(&self, vm: &VmConfig) -> Vec<Finding> {
+        check_vm(
+            vm,
+            &self.host,
+            Some(&self.capabilities),
+            self.uefi_firmware.as_ref(),
+            &self.i18n,
+        )
     }
 
     /// Make sure a UEFI machine has the variable store QEMU demands.
@@ -528,6 +543,30 @@ impl FaroQemApp {
             let log_buf = self.console_logs.entry(id).or_default();
             log_buf.push_error(&err_msg);
             return Err(err_msg);
+        }
+
+        // The check runs after ensure_nvram, not before: the variable store
+        // is ours to create, and a machine must not be held for a file the
+        // app was about to write. What remains missing is someone else's.
+        let findings = self.findings_for(&vm);
+        if blocks(&findings) {
+            let err_msg = findings
+                .iter()
+                .map(|f| f.text.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.status_map.insert(id, VmStatus::Error(err_msg.clone()));
+            let log_buf = self.console_logs.entry(id).or_default();
+            for finding in &findings {
+                log_buf.push_error(&finding.text);
+            }
+            return Err(err_msg);
+        }
+        if !findings.is_empty() {
+            let log_buf = self.console_logs.entry(id).or_default();
+            for finding in &findings {
+                log_buf.push_system(finding.text.clone());
+            }
         }
 
         let args = match build_qemu_args(&vm, self.uefi_firmware.as_ref()) {
@@ -875,6 +914,7 @@ impl FaroQemApp {
                     let pid = self.status_map.get(&id).and_then(|s| s.pid());
                     let cli_cmd = self.cli_previews.get(&id).map(|s| s.as_str());
                     let qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref());
+                    let findings = self.findings_for(&self.vms[pos]);
 
                     let console_buf = self.console_logs.entry(id).or_default();
                     let mut view = VmDetailView::new(
@@ -888,7 +928,8 @@ impl FaroQemApp {
                     .with_console(console_buf)
                     .with_logo(self.logo_texture.as_ref())
                     .with_capabilities(&self.capabilities)
-                    .with_firmware(self.uefi_firmware.is_some());
+                    .with_firmware(self.uefi_firmware.is_some())
+                    .with_findings(&findings);
 
                     if let Some(p) = pid {
                         view = view.with_pid(p);

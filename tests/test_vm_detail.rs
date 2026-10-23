@@ -644,3 +644,67 @@ fn test_a_stored_accelerator_that_is_gone_is_marked_not_silently_replaced() {
         drawn
     );
 }
+
+// Part 3a, task 6
+#[test]
+fn test_the_panel_shows_what_would_stop_the_start() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let findings = vec![
+        faro_qem::preflight::Finding {
+            severity: faro_qem::preflight::Severity::Blocking,
+            text: "NO DISK AT C:/nope/disk.qcow2".to_string(),
+        },
+        faro_qem::preflight::Finding {
+            severity: faro_qem::preflight::Severity::Warning,
+            text: "MORE MEMORY THAN THE HOST HAS".to_string(),
+        },
+    ];
+
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&caps)
+                    .with_findings(&findings)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    for finding in &findings {
+        assert!(
+            drawn.contains(&finding.text),
+            "missing {:?}, drew:\n{}",
+            finding.text,
+            drawn
+        );
+    }
+}
+
+#[test]
+fn test_a_panel_without_findings_draws_none_of_them() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&caps)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(!drawn.contains("NO DISK AT"));
+}

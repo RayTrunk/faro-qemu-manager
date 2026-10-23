@@ -109,5 +109,15 @@
   "creation_mode": "When creating a machine",
   "creation_mode_wizard": "Wizard with templates",
   "creation_mode_direct": "Direct, set everything by hand",
-  "create_failed": "Could not create {name}"
+  "create_failed": "Could not create {name}",
+  "pf_missing_disk": "Disk image not found: {path}",
+  "pf_missing_iso": "ISO not found: {path}",
+  "pf_missing_nvram": "UEFI variable store not found: {path}",
+  "pf_missing_firmware": "Firmware not found: {path}",
+  "pf_memory_over_host": "{vm} MB is more than this host has ({host} MB)",
+  "pf_cores_over_host": "{vm} cores are more than this host has ({host})",
+  "pf_accel_substituted": "{stored} is not available here; {replacement} would be used instead. Choose one on purpose.",
+  "pf_backend_unavailable": "This QEMU has no network backend {backend}",
+  "pf_machine_unknown": "This QEMU does not know the machine type {machine}",
+  "pf_too_many_sata": "{count} SATA disks, but the AHCI controller has {ports} ports"
 }

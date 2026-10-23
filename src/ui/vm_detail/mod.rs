@@ -17,11 +17,12 @@ use uuid::Uuid;
 
 use crate::config::{DriveFormat, VmConfig};
 use crate::i18n::I18n;
+use crate::preflight::{Finding, Severity};
 use crate::qemu::QemuCapabilities;
 use crate::ui::console::{ConsoleLogBuffer, ConsoleView};
 use crate::ui::theme::{
     card_frame, icons, status_badge, COLOR_ERROR, COLOR_PRIMARY, COLOR_RUNNING, COLOR_STOPPED,
-    ROUNDING_BUTTON,
+    COLOR_WARNING, ROUNDING_BUTTON,
 };
 
 /// Graphics adapters worth offering for `arch`.
@@ -131,6 +132,9 @@ pub struct VmDetailView<'a> {
     /// present, the same way an unprobed capability permits everything: a
     /// warning nobody asked for is worse than none.
     pub uefi_available: bool,
+    /// What the start check found for this machine. Shown above the start
+    /// button, so a refused start is explained before it is attempted.
+    pub findings: &'a [Finding],
 }
 
 impl<'a> VmDetailView<'a> {
@@ -156,10 +160,17 @@ impl<'a> VmDetailView<'a> {
             logo: None,
             capabilities: None,
             uefi_available: true,
+            findings: &[],
         }
     }
 
     /// Attach what the installed QEMU can do, so the view offers only that.
+    /// Hand the panel what the start check found.
+    pub fn with_findings(mut self, findings: &'a [Finding]) -> Self {
+        self.findings = findings;
+        self
+    }
+
     /// Tell the panel whether the UEFI firmware pair was found.
     pub fn with_firmware(mut self, available: bool) -> Self {
         self.uefi_available = available;
@@ -201,6 +212,19 @@ impl<'a> VmDetailView<'a> {
 
         // 1. Top Header Card (Swiss Architectural Folio Header)
         card_frame(ui.visuals()).show(ui, |ui| {
+            // Said before the start, not read in the console afterwards. This
+            // sits above the two layout branches so neither can omit it.
+            for finding in self.findings {
+                let colour = match finding.severity {
+                    Severity::Blocking => COLOR_ERROR,
+                    Severity::Warning => COLOR_WARNING,
+                };
+                ui.label(egui::RichText::new(&finding.text).size(11.0).color(colour));
+            }
+            if !self.findings.is_empty() {
+                ui.add_space(4.0);
+            }
+
             let compact = ui.available_width() < 560.0;
             if compact {
                 // Stacked layout for compact / narrow windows
