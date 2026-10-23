@@ -171,6 +171,135 @@ pub fn find_qemu_img(custom_dir: Option<&Path>) -> Option<PathBuf> {
     search_binary_candidates(custom_dir, &candidate_names)
 }
 
+/// What the installed QEMU can do, as reported by its own help output.
+///
+/// An empty list means **not probed**, not "nothing available" — so the
+/// `has_*` queries answer `true` for an empty list. Hiding an option because
+/// we failed to ask would tell the user something is unavailable when we
+/// simply do not know.
+#[derive(Debug, Clone, Default)]
+pub struct QemuCapabilities {
+    pub machines: Vec<String>,
+    pub devices: Vec<String>,
+    pub netdev_backends: Vec<String>,
+    pub accelerators: Vec<String>,
+}
+
+impl QemuCapabilities {
+    /// Whether anything at all was learned from QEMU.
+    pub fn was_probed(&self) -> bool {
+        !self.machines.is_empty()
+            || !self.devices.is_empty()
+            || !self.netdev_backends.is_empty()
+            || !self.accelerators.is_empty()
+    }
+
+    pub fn has_machine(&self, name: &str) -> bool {
+        list_allows(&self.machines, name)
+    }
+
+    pub fn has_device(&self, name: &str) -> bool {
+        list_allows(&self.devices, name)
+    }
+
+    pub fn has_netdev(&self, name: &str) -> bool {
+        list_allows(&self.netdev_backends, name)
+    }
+
+    pub fn has_accelerator(&self, name: &str) -> bool {
+        list_allows(&self.accelerators, name)
+    }
+}
+
+/// An unprobed (empty) list permits everything; a probed one is authoritative.
+fn list_allows(list: &[String], name: &str) -> bool {
+    list.is_empty() || list.iter().any(|n| n == name)
+}
+
+/// Run one `-<what> help` query and collect the names it reports.
+fn query_help(binary: &Path, flag: &str) -> Vec<String> {
+    let mut cmd = Command::new(binary);
+    cmd.arg(flag);
+    cmd.arg("help");
+    cmd.stdin(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let Ok(output) = cmd.output() else {
+        return Vec::new();
+    };
+
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    text.lines().flat_map(parse_help_names).collect()
+}
+
+/// Pull every usable identifier out of one line of QEMU help output.
+///
+/// The forms differ by query. `-device help` writes
+/// `name "ich9-ahci", bus PCI, alias "ahci"` — and the alias is what one
+/// actually passes to `-device`, so **both** names count; taking only the
+/// primary one would report AHCI as unavailable on a QEMU that has it.
+/// `-machine help` and `-netdev help` lead with the bare name instead.
+/// Heading lines such as "Available netdev backend types:" carry no name.
+fn parse_help_names(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.ends_with(':') {
+        return Vec::new();
+    }
+
+    if trimmed.starts_with("name \"") {
+        return quoted_values_after(trimmed, "name \"")
+            .into_iter()
+            .chain(quoted_values_after(trimmed, "alias \""))
+            .collect();
+    }
+
+    let Some(first) = trimmed.split_whitespace().next() else {
+        return Vec::new();
+    };
+    // Prose lines ("Some display backends support suboptions, …") start with a
+    // capitalised word; QEMU identifiers never do.
+    if first.chars().next().is_some_and(|c| c.is_uppercase()) {
+        return Vec::new();
+    }
+    vec![first.trim_matches('"').to_string()]
+}
+
+/// Every value introduced by `marker` and closed by the next quote.
+fn quoted_values_after(line: &str, marker: &str) -> Vec<String> {
+    line.match_indices(marker)
+        .filter_map(|(at, _)| {
+            line[at + marker.len()..]
+                .split('"')
+                .next()
+                .filter(|v| !v.is_empty())
+                .map(|v| v.to_string())
+        })
+        .collect()
+}
+
+/// Ask `binary` what it supports. Each query runs exactly once.
+///
+/// Call this when the QEMU directory is chosen or changed, and keep the result
+/// — it spawns four processes and must never run as part of drawing a frame.
+pub fn probe_capabilities(binary: &Path) -> QemuCapabilities {
+    QemuCapabilities {
+        machines: query_help(binary, "-machine"),
+        devices: query_help(binary, "-device"),
+        netdev_backends: query_help(binary, "-netdev"),
+        accelerators: query_help(binary, "-accel"),
+    }
+}
+
 /// Construct command-line arguments to launch QEMU for the given `VmConfig`.
 pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
     let mut args = Vec::new();
