@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // Unit tests for UI Theme and typography
 
 use egui::{Color32, Context};

@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // Integration & End-to-End Application State Tests
 
 use egui::Context;

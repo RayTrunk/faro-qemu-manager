@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // Application State Integration & Main Controller
 
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
 use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
 use crate::ui::vm_detail::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
 
-/// FARO QEM central application state
+/// FARO QEMU MANAGER central application state
 pub struct FaroQemApp {
     pub settings: AppSettings,
     pub settings_path: PathBuf,
@@ -588,7 +588,7 @@ impl FaroQemApp {
                             ui.image((logo.id(), egui::vec2(64.0, 64.0)));
                             ui.add_space(6.0);
                         }
-                        ui.heading("FARO QEM");
+                        ui.heading("FARO QEMU MANAGER");
                         ui.label(
                             egui::RichText::new("(C) R.Trunk 2026")
                                 .strong()

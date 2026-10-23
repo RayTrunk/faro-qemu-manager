@@ -1,5 +1,5 @@
 {
-  "app_title": "FARO QEM",
+  "app_title": "FARO QEMU MANAGER",
   "app_copyright": "(C) R.Trunk 2026",
   "search_placeholder": "Search VMs...",
   "no_vms_found": "No virtual machines found",
@@ -87,6 +87,6 @@
   "menu_settings": "Settings",
   "menu_help": "Help",
   "open_settings": "Preferences & Settings...",
-  "about": "About FARO QEM",
+  "about": "About FARO QEMU MANAGER",
   "exit": "Exit"
 }

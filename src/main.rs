@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // Native Application Entry Point
 
 use eframe::egui;
@@ -9,7 +9,7 @@ fn main() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1120.0, 720.0])
         .with_min_inner_size([880.0, 600.0])
-        .with_title("FARO QEM (C) R.Trunk 2026");
+        .with_title("FARO QEMU MANAGER (C) R.Trunk 2026");
 
     if let Some(icon) = load_app_icon() {
         viewport = viewport.with_icon(icon);
@@ -21,7 +21,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "FARO QEM (C) R.Trunk 2026",
+        "FARO QEMU MANAGER (C) R.Trunk 2026",
         options,
         Box::new(|cc| Ok(Box::new(FaroQemApp::new(cc)))),
     )

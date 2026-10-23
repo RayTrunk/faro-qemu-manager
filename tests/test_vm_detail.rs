@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // Unit tests for VM Detail Tabs and Hardware Controls component
 
 use egui::Context;

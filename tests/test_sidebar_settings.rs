@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // Unit tests for Sidebar and Settings Dialog components
 
 use egui::Context;

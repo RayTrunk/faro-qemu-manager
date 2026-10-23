@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // Sidebar navigation and VM list component
 
 use egui::{Color32, Margin, Stroke};

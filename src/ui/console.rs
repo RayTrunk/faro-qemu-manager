@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // Live Console & Logs Viewer Component
 
 use egui::{Color32, Frame, Margin, Rounding, Stroke, Ui};
@@ -517,7 +517,7 @@ impl<'a> ConsoleView<'a> {
                     ui.add_space(30.0);
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new("[FARO QEM] Console output buffer is empty.")
+                            egui::RichText::new("[FARO QEMU MANAGER] Console output buffer is empty.")
                                 .monospace()
                                 .size(12.0)
                                 .color(Color32::from_rgb(120, 125, 135)),

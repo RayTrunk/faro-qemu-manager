@@ -1,5 +1,5 @@
 {
-  "app_title": "FARO QEM",
+  "app_title": "FARO QEMU MANAGER",
   "app_copyright": "(C) R.Trunk 2026",
   "search_placeholder": "Rechercher des MV...",
   "no_vms_found": "Aucune machine virtuelle trouvée",
@@ -87,6 +87,6 @@
   "menu_settings": "Paramètres",
   "menu_help": "Aide",
   "open_settings": "Ouvrir les paramètres...",
-  "about": "À propos de FARO QEM",
+  "about": "À propos de FARO QEMU MANAGER",
   "exit": "Quitter"
 }

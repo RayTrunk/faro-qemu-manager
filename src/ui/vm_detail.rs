@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // VM Detail Tabs and Hardware Controls component
 
 use egui::{Color32, Stroke};
@@ -1167,7 +1167,7 @@ impl<'a> VmDetailView<'a> {
                 if self.is_running {
                     ui.label(
                         egui::RichText::new(format!(
-                            "[FARO QEM] Virtual Machine '{}' is running.\nProcess supervisor is streaming output in background...",
+                            "[FARO QEMU MANAGER] Virtual Machine '{}' is running.\nProcess supervisor is streaming output in background...",
                             self.vm.name
                         ))
                         .monospace()
@@ -1177,7 +1177,7 @@ impl<'a> VmDetailView<'a> {
                 } else {
                     ui.label(
                         egui::RichText::new(format!(
-                            "[FARO QEM] Virtual Machine '{}' is stopped.\nClick 'Launch VM' to initialize hardware emulation.",
+                            "[FARO QEMU MANAGER] Virtual Machine '{}' is stopped.\nClick 'Launch VM' to initialize hardware emulation.",
                             self.vm.name
                         ))
                         .monospace()

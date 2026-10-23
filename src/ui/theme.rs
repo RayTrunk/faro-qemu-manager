@@ -1,4 +1,4 @@
-// FARO QEM (C) R.Trunk 2026
+// FARO QEMU MANAGER (C) R.Trunk 2026
 // Modern Typography, Icons & Theme Engine
 
 use egui::{
@@ -358,7 +358,7 @@ pub fn section_header(ui: &mut Ui, title: &str) {
     });
 }
 
-/// Load the embedded FARO QEM logo image.
+/// Load the embedded FARO QEMU MANAGER logo image.
 pub fn load_app_logo() -> Option<egui::ColorImage> {
     let bytes = include_bytes!("../../assets/logo.png");
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
@@ -367,7 +367,7 @@ pub fn load_app_logo() -> Option<egui::ColorImage> {
     Some(egui::ColorImage::from_rgba_unmultiplied(size, &pixels))
 }
 
-/// Load the embedded FARO QEM logo as window icon data (scaled to 128x128 for Win32/X11 compatibility).
+/// Load the embedded FARO QEMU MANAGER logo as window icon data (scaled to 128x128 for Win32/X11 compatibility).
 pub fn load_app_icon() -> Option<egui::IconData> {
     let bytes = include_bytes!("../../assets/logo.png");
     let img = image::load_from_memory(bytes).ok()?;
