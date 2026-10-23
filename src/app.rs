@@ -13,8 +13,9 @@ use crate::config::{
 };
 use crate::i18n::I18n;
 use crate::qemu::{
-    build_qemu_args, find_qemu_binary, find_qemu_img, find_uefi_firmware, prepare_nvram,
-    probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent, UefiFirmware, VmProcess,
+    build_qemu_args, find_qemu_binary, find_qemu_img, find_uefi_firmware, nvram_path_for,
+    prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent, UefiFirmware,
+    VmProcess,
 };
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
@@ -263,6 +264,46 @@ impl FaroQemApp {
         self.uefi_firmware = find_uefi_firmware(self.settings.qemu_dir.as_deref());
     }
 
+    /// Point a duplicated machine at its own UEFI variable store.
+    ///
+    /// The store's name carries the machine's id, so a plain clone leaves both
+    /// machines sharing one file and overwriting each other's boot entries.
+    /// The copy gets a fresh path and, where the original store exists, its
+    /// current contents: the guest was installed with those entries.
+    ///
+    /// Returns a message when the contents could not be carried over. The
+    /// copy is still usable then — the next start creates a pristine store —
+    /// but it will not boot the installed system, which the user should hear.
+    fn rebase_nvram(&self, cloned: &mut VmConfig) -> Option<String> {
+        let Firmware::Uefi { nvram } = &cloned.firmware else {
+            return None;
+        };
+        let original = nvram.clone();
+        let fresh = nvram_path_for(cloned);
+        if fresh == original {
+            return None;
+        }
+        cloned.firmware = Firmware::Uefi {
+            nvram: fresh.clone(),
+        };
+
+        if !original.is_file() {
+            return None;
+        }
+        if let Some(parent) = fresh.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        std::fs::copy(&original, &fresh).err().map(|e| {
+            format!(
+                "Could not copy the UEFI variable store to {}: {}",
+                fresh.display(),
+                e
+            )
+        })
+    }
+
     /// Make sure a UEFI machine has the variable store QEMU demands.
     ///
     /// The UI only records where the store belongs; this is what puts it
@@ -505,6 +546,9 @@ impl FaroQemApp {
                     cloned.id = Uuid::new_v4();
                     cloned.name = format!("{} (Copy)", cloned.name);
                     let new_id = cloned.id;
+                    if let Some(problem) = self.rebase_nvram(&mut cloned) {
+                        self.push_notice(Notice::warning(problem));
+                    }
                     self.vms.push(cloned);
                     self.selected_vm_id = Some(new_id);
                     self.save_vms_now();
@@ -779,7 +823,8 @@ impl FaroQemApp {
                     )
                     .with_console(console_buf)
                     .with_logo(self.logo_texture.as_ref())
-                    .with_capabilities(&self.capabilities);
+                    .with_capabilities(&self.capabilities)
+                    .with_firmware(self.uefi_firmware.is_some());
 
                     if let Some(p) = pid {
                         view = view.with_pid(p);

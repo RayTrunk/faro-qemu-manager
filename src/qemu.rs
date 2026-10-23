@@ -618,6 +618,21 @@ pub fn find_uefi_firmware(custom_dir: Option<&Path>) -> Option<UefiFirmware> {
 ///
 /// Does nothing when the target already exists: that file holds the guest's
 /// boot entries, and replacing it would make an installed system unbootable.
+/// Where a machine's UEFI variable store belongs: beside its first disk, so
+/// it travels with the machine, named after the machine's own id.
+///
+/// The id in the name is what keeps two machines apart. A duplicate that
+/// keeps the original's path points both at one file, and they overwrite each
+/// other's boot entries — so this is the one place that builds the name, and
+/// both the firmware switch and the duplicate call it.
+pub fn nvram_path_for(vm: &VmConfig) -> PathBuf {
+    vm.drives
+        .first()
+        .and_then(|d| d.path.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_default()
+        .join(format!("{}-nvram.fd", vm.id))
+}
+
 pub fn prepare_nvram(template: &Path, target: &Path) -> Result<(), String> {
     if target.exists() {
         return Ok(());

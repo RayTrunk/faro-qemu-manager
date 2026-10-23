@@ -6,8 +6,11 @@ use std::sync::mpsc;
 use tempfile::tempdir;
 
 use faro_qem::app::FaroQemApp;
-use faro_qem::config::{load_settings, load_vms, Accelerator, Arch, Firmware, VmConfig};
-use faro_qem::qemu::{spawn_qemu, QemuEvent};
+use faro_qem::config::{
+    load_settings, load_vms, Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, Firmware,
+    VmConfig,
+};
+use faro_qem::qemu::{nvram_path_for, spawn_qemu, QemuEvent};
 use faro_qem::ui::console::LogLevel;
 use faro_qem::ui::sidebar::{SidebarAction, VmStatus};
 use faro_qem::ui::vm_detail::{DetailTab, VmDetailAction};
@@ -435,5 +438,62 @@ fn test_a_uefi_vm_is_refused_when_no_firmware_was_found() {
         err.to_lowercase().contains("uefi"),
         "the message must name what is missing, got: {}",
         err
+    );
+}
+
+// Important 6
+#[test]
+fn test_duplicating_a_uefi_vm_gives_the_copy_its_own_variable_store() {
+    let dir = tempdir().unwrap();
+    let app_dir = dir.path();
+    let mut app = app_with_qemu_dir(app_dir);
+
+    let disk = app_dir.join("vm").join("disk.qcow2");
+    std::fs::create_dir_all(disk.parent().unwrap()).unwrap();
+    std::fs::write(&disk, b"DISK").unwrap();
+
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.drives.push(DriveConfig {
+        path: disk,
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::Sata,
+        boot_index: None,
+    });
+    vm.firmware = Firmware::Uefi {
+        nvram: nvram_path_for(&vm),
+    };
+    let original_nvram = match &vm.firmware {
+        Firmware::Uefi { nvram } => nvram.clone(),
+        _ => unreachable!(),
+    };
+    std::fs::write(&original_nvram, b"ORIGINAL BOOT ENTRIES").unwrap();
+
+    let original_id = vm.id;
+    app.vms.push(vm);
+    app.handle_sidebar_action(SidebarAction::DuplicateVm(original_id), None);
+
+    let copy = app
+        .vms
+        .iter()
+        .find(|v| v.id != original_id && v.name.contains("Windows 11"))
+        .expect("the copy is in the list");
+    let copy_nvram = match &copy.firmware {
+        Firmware::Uefi { nvram } => nvram.clone(),
+        other => panic!("the copy must stay a UEFI machine, got {:?}", other),
+    };
+
+    assert_ne!(
+        copy_nvram, original_nvram,
+        "one store for two machines means they overwrite each other's boot entries"
+    );
+    assert_eq!(
+        std::fs::read(&copy_nvram).unwrap(),
+        b"ORIGINAL BOOT ENTRIES",
+        "the copy of an installed machine keeps its boot entries"
+    );
+    assert_eq!(
+        std::fs::read(&original_nvram).unwrap(),
+        b"ORIGINAL BOOT ENTRIES",
+        "and the original is untouched"
     );
 }

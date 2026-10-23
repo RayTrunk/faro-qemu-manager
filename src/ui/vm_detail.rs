@@ -10,7 +10,7 @@ use crate::config::{
     VmConfig,
 };
 use crate::i18n::I18n;
-use crate::qemu::{create_disk_image, find_qemu_img, find_uefi_firmware, QemuCapabilities};
+use crate::qemu::{create_disk_image, find_qemu_img, nvram_path_for, QemuCapabilities};
 use crate::ui::console::{ConsoleLogBuffer, ConsoleView};
 use crate::ui::theme::{
     card_frame, danger_button, icons, section_header, status_badge, COLOR_ERROR, COLOR_PRIMARY,
@@ -167,6 +167,12 @@ pub struct VmDetailView<'a> {
     pub logo: Option<&'a egui::TextureHandle>,
     /// What the installed QEMU can do. `None` means nobody asked.
     pub capabilities: Option<&'a QemuCapabilities>,
+    /// Whether the app found the firmware a UEFI machine needs. Resolved once
+    /// beside the capabilities; searching for it here would mean a handful of
+    /// `is_file` calls on every frame this panel draws. Unknown counts as
+    /// present, the same way an unprobed capability permits everything: a
+    /// warning nobody asked for is worse than none.
+    pub uefi_available: bool,
 }
 
 impl<'a> VmDetailView<'a> {
@@ -191,10 +197,17 @@ impl<'a> VmDetailView<'a> {
             cli_command: None,
             logo: None,
             capabilities: None,
+            uefi_available: true,
         }
     }
 
     /// Attach what the installed QEMU can do, so the view offers only that.
+    /// Tell the panel whether the UEFI firmware pair was found.
+    pub fn with_firmware(mut self, available: bool) -> Self {
+        self.uefi_available = available;
+        self
+    }
+
     pub fn with_capabilities(mut self, caps: &'a QemuCapabilities) -> Self {
         self.capabilities = Some(caps);
         self
@@ -702,16 +715,9 @@ impl<'a> VmDetailView<'a> {
                                 .clicked()
                                 && !is_uefi
                             {
-                                // The variable store lives beside the VM's first
-                                // disk, so it travels with the machine.
-                                let nvram = self
-                                    .vm
-                                    .drives
-                                    .first()
-                                    .and_then(|d| d.path.parent().map(|p| p.to_path_buf()))
-                                    .unwrap_or_default()
-                                    .join(format!("{}-nvram.fd", self.vm.id));
-                                self.vm.firmware = Firmware::Uefi { nvram };
+                                self.vm.firmware = Firmware::Uefi {
+                                    nvram: nvram_path_for(self.vm),
+                                };
                             }
                         });
 
@@ -768,7 +774,7 @@ impl<'a> VmDetailView<'a> {
                                     .monospace()
                                     .color(ui.visuals().weak_text_color()),
                                 );
-                                if find_uefi_firmware(None).is_none() {
+                                if !self.uefi_available {
                                     ui.label(
                                         egui::RichText::new(self.i18n.t("firmware_missing"))
                                             .size(11.0)

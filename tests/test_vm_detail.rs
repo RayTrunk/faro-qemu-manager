@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use faro_qem::config::{
-    Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, PortForwardRule, VmConfig,
+    Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, Firmware, PortForwardRule,
+    VmConfig,
 };
 use faro_qem::i18n::I18n;
 use faro_qem::qemu::QemuCapabilities;
@@ -509,4 +510,44 @@ fn test_system_tab_renders_the_firmware_selector() {
 {}",
         drawn
     );
+}
+
+// Important 7
+#[test]
+fn test_the_missing_firmware_hint_follows_what_the_app_resolved() {
+    let i18n = I18n::new("en");
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.firmware = Firmware::Uefi {
+        nvram: std::path::PathBuf::from("nvram.fd"),
+    };
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+
+    // The panel must not go looking for the firmware itself: that is a
+    // handful of is_file calls on every frame it draws. It is told once.
+    for (available, expected) in [(false, true), (true, false)] {
+        let ctx = Context::default();
+        let mut draw = || {
+            ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal)
+                        .with_capabilities(&caps)
+                        .with_firmware(available)
+                        .show(ui);
+                });
+            })
+        };
+        let _ = draw();
+        let output = draw();
+        let drawn = common::rendered_text(&output);
+        assert_eq!(
+            drawn.contains(i18n.t("firmware_missing")),
+            expected,
+            "firmware available = {}, drew:
+{}",
+            available,
+            drawn
+        );
+    }
 }
