@@ -148,3 +148,26 @@ fn test_unreadable_config_path_is_reported_and_never_destroyed() {
         "USER DATA"
     );
 }
+
+#[test]
+fn test_failing_save_is_reported_to_the_user() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = FaroQemApp::with_paths(
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+        None,
+    );
+    app.notices.clear();
+
+    // Make the target unwritable by putting a directory in its place.
+    let blocked = dir.path().join("blocked").join("vms.json");
+    std::fs::create_dir_all(&blocked).unwrap();
+    app.vms_path = blocked;
+
+    app.handle_sidebar_action(faro_qem::ui::sidebar::SidebarAction::NewVm, None);
+
+    assert!(
+        app.notices.iter().any(|n| n.level == NoticeLevel::Error),
+        "a save that failed must not be silent"
+    );
+}

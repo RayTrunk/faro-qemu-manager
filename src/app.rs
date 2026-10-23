@@ -189,6 +189,25 @@ impl FaroQemApp {
         }
     }
 
+    /// Persist the VM list, reporting a failure instead of discarding it.
+    ///
+    /// A silently dropped write means the user's next start quietly loses the
+    /// change they just made.
+    fn save_vms_now(&mut self) {
+        if let Err(e) = save_vms(&self.vms_path, &self.vms) {
+            let notice = save_failure_notice(&self.i18n, &self.vms_path, &e);
+            self.notices.push(notice);
+        }
+    }
+
+    /// Persist application settings, reporting a failure instead of discarding it.
+    fn save_settings_now(&mut self) {
+        if let Err(e) = save_settings(&self.settings_path, &self.settings) {
+            let notice = save_failure_notice(&self.i18n, &self.settings_path, &e);
+            self.notices.push(notice);
+        }
+    }
+
     /// Non-blocking drain of all asynchronous QEMU events from running process channels
     pub fn process_qemu_events(&mut self, ctx: Option<&egui::Context>) {
         let mut exited_ids = Vec::new();
@@ -340,7 +359,7 @@ impl FaroQemApp {
                 let new_id = new_vm.id;
                 self.vms.push(new_vm);
                 self.selected_vm_id = Some(new_id);
-                let _ = save_vms(&self.vms_path, &self.vms);
+                self.save_vms_now();
             }
             SidebarAction::DuplicateVm(id) => {
                 if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
@@ -350,7 +369,7 @@ impl FaroQemApp {
                     let new_id = cloned.id;
                     self.vms.push(cloned);
                     self.selected_vm_id = Some(new_id);
-                    let _ = save_vms(&self.vms_path, &self.vms);
+                    self.save_vms_now();
                 }
             }
             SidebarAction::DeleteVm(id) => {
@@ -360,7 +379,7 @@ impl FaroQemApp {
                 self.cli_previews.remove(&id);
                 if let Some(pos) = self.vms.iter().position(|v| v.id == id) {
                     self.vms.remove(pos);
-                    let _ = save_vms(&self.vms_path, &self.vms);
+                    self.save_vms_now();
                     if self.selected_vm_id == Some(id) {
                         if self.vms.is_empty() {
                             self.selected_vm_id = None;
@@ -388,7 +407,7 @@ impl FaroQemApp {
                 let _ = self.stop_vm(id);
             }
             VmDetailAction::Save(_id) => {
-                let _ = save_vms(&self.vms_path, &self.vms);
+                self.save_vms_now();
             }
         }
     }
@@ -640,7 +659,7 @@ impl FaroQemApp {
             let mut dialog =
                 SettingsDialog::new(&mut self.settings_open, &mut self.settings, &mut self.i18n);
             if dialog.show(ctx) {
-                let _ = save_settings(&self.settings_path, &self.settings);
+                self.save_settings_now();
                 apply_theme(ctx, &self.settings.theme);
                 self.i18n.set_locale(&self.settings.language);
             }
@@ -689,6 +708,8 @@ impl Drop for FaroQemApp {
         for (_id, (mut proc, _)) in self.running_processes.drain() {
             let _ = proc.kill();
         }
+        // Discarded deliberately: the window is going away, so there is no
+        // interface left that could show a notice about a failed write.
         let _ = save_vms(&self.vms_path, &self.vms);
         let _ = save_settings(&self.settings_path, &self.settings);
     }
