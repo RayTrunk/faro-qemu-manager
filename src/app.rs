@@ -7,14 +7,15 @@ use std::sync::mpsc;
 use uuid::Uuid;
 
 use crate::config::{
-    default_settings_path, default_vms_path, load_settings, load_vms, save_settings, save_vms,
-    AppSettings, VmConfig,
+    default_settings_path, default_vms_path, quarantine_file, save_settings, save_vms,
+    try_load_settings, try_load_vms, AppSettings, ConfigLoadError, VmConfig,
 };
 use crate::i18n::I18n;
 use crate::qemu::{
     build_qemu_args, find_qemu_binary, find_qemu_img, spawn_qemu, QemuEvent, VmProcess,
 };
 use crate::ui::console::ConsoleLogBuffer;
+use crate::ui::notice::Notice;
 use crate::ui::settings::SettingsDialog;
 use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
 use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
@@ -39,6 +40,49 @@ pub struct FaroQemApp {
     pub cli_previews: HashMap<Uuid, String>,
     pub confirming_delete_id: Option<Uuid>,
     pub logo_texture: Option<egui::TextureHandle>,
+    /// Problems the user needs to know about, shown as a band above the menu.
+    pub notices: Vec<Notice>,
+}
+
+/// Short, human-facing name for a configuration path.
+fn file_label(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Set an unreadable configuration file aside and report what happened.
+///
+/// The file holds work the user cares about, so it is never replaced. Which of
+/// the two outcomes occurred matters to them: either their bytes are safe at a
+/// named path, or they are still sitting where they were and nothing was done
+/// to them.
+fn preservation_notice(i18n: &I18n, path: &Path, why: &ConfigLoadError) -> Notice {
+    let file = file_label(path);
+    match quarantine_file(path) {
+        Ok(kept) => Notice::error(i18n.tf(
+            "config_corrupt_quarantined",
+            &[
+                ("file", file.as_str()),
+                ("path", kept.display().to_string().as_str()),
+            ],
+        )),
+        Err(e) => Notice::error(i18n.tf(
+            "config_corrupt_not_quarantined",
+            &[
+                ("file", file.as_str()),
+                ("detail", format!("{}: {}", why, e).as_str()),
+            ],
+        )),
+    }
+}
+
+/// Report a configuration file that could not be written.
+fn save_failure_notice(i18n: &I18n, path: &Path, detail: &str) -> Notice {
+    Notice::error(i18n.tf(
+        "config_save_failed",
+        &[("file", file_label(path).as_str()), ("detail", detail)],
+    ))
 }
 
 impl FaroQemApp {
@@ -67,22 +111,51 @@ impl FaroQemApp {
         vms_path: PathBuf,
         ctx: Option<&egui::Context>,
     ) -> Self {
-        let settings = load_settings(&settings_path);
-        let mut vms = load_vms(&vms_path);
+        let mut notices: Vec<Notice> = Vec::new();
 
-        if vms.is_empty() {
+        // Settings come first: the chosen language decides what language the
+        // notices below are written in.
+        let settings = match try_load_settings(&settings_path) {
+            Ok(loaded) => loaded,
+            Err(ConfigLoadError::Missing) => AppSettings::default(),
+            Err(why) => {
+                let defaults = AppSettings::default();
+                notices.push(preservation_notice(
+                    &I18n::new(&defaults.language),
+                    &settings_path,
+                    &why,
+                ));
+                defaults
+            }
+        };
+
+        let i18n = I18n::new(&settings.language);
+
+        // An unreadable VM list is the user's data. Preserve it, say so, and
+        // start empty — writing a starter VM here is what used to destroy it.
+        let (mut vms, vms_unreadable) = match try_load_vms(&vms_path) {
+            Ok(loaded) => (loaded, false),
+            Err(ConfigLoadError::Missing) => (Vec::new(), false),
+            Err(why) => {
+                notices.push(preservation_notice(&i18n, &vms_path, &why));
+                (Vec::new(), true)
+            }
+        };
+
+        if vms.is_empty() && !vms_unreadable {
             let mut default_vm = VmConfig::default();
             default_vm.id = Uuid::new_v4();
             default_vm.name = "Debian 12".to_string();
             default_vm.arch = settings.default_arch;
             default_vm.machine_type = default_vm.arch.default_machine().to_string();
             default_vm.cpu_model = default_vm.arch.default_cpu().to_string();
-            let _ = save_vms(&vms_path, &[default_vm.clone()]);
+            if let Err(e) = save_vms(&vms_path, &[default_vm.clone()]) {
+                notices.push(save_failure_notice(&i18n, &vms_path, &e));
+            }
             vms.push(default_vm);
         }
 
         let selected_vm_id = vms.first().map(|v| v.id);
-        let i18n = I18n::new(&settings.language);
 
         let logo_texture = ctx.and_then(|c| {
             crate::ui::theme::load_app_logo()
@@ -112,6 +185,7 @@ impl FaroQemApp {
             cli_previews: HashMap::new(),
             confirming_delete_id: None,
             logo_texture,
+            notices,
         }
     }
 
