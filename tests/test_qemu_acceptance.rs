@@ -4,8 +4,8 @@
 mod common;
 
 use common::{qemu_accepts, Acceptance};
-use faro_qem::config::{Arch, DriveConfig, DriveFormat, DriveInterface, VmConfig};
-use faro_qem::qemu::build_qemu_args;
+use faro_qem::config::{Arch, DriveConfig, DriveFormat, DriveInterface, Firmware, VmConfig};
+use faro_qem::qemu::{build_qemu_args, find_uefi_firmware, prepare_nvram};
 
 #[test]
 fn test_the_probe_can_tell_good_arguments_from_bad() {
@@ -90,4 +90,57 @@ fn test_qemu_accepts_user_networking_with_two_port_forwards() {
         });
     }
     common::assert_accepted("user + 2 forwards", Arch::X86_64, &build_qemu_args(&vm));
+}
+
+// Review Focus 5
+#[test]
+fn test_two_uefi_vms_get_separate_nvram_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(uefi) = find_uefi_firmware(None) else {
+        eprintln!("skipped: no edk2 firmware on this machine");
+        return;
+    };
+
+    let mut built = Vec::new();
+    for name in ["one", "two"] {
+        let nvram = dir.path().join(name).join("nvram.fd");
+        prepare_nvram(&uefi.vars_template, &nvram).expect("nvram copy");
+        built.push(nvram);
+    }
+    assert_ne!(built[0], built[1]);
+    assert!(built.iter().all(|p| p.is_file()));
+
+    // A second call must not wipe the boot entries the guest wrote.
+    std::fs::write(&built[0], b"GUEST BOOT ENTRIES").unwrap();
+    prepare_nvram(&uefi.vars_template, &built[0]).unwrap();
+    assert_eq!(
+        std::fs::read(&built[0]).unwrap(),
+        b"GUEST BOOT ENTRIES",
+        "an existing NVRAM file is the guest's, not ours to replace"
+    );
+}
+
+#[test]
+fn test_qemu_accepts_a_uefi_machine() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(uefi) = find_uefi_firmware(None) else {
+        eprintln!("skipped: no edk2 firmware on this machine");
+        return;
+    };
+
+    let disk = dir.path().join("d.qcow2");
+    common::make_empty_qcow2(&disk);
+    let nvram = dir.path().join("nvram.fd");
+    prepare_nvram(&uefi.vars_template, &nvram).unwrap();
+
+    let mut vm = VmConfig::new_default("win11-probe", Arch::X86_64);
+    vm.firmware = Firmware::Uefi { nvram };
+    vm.drives.push(DriveConfig {
+        path: disk,
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::Sata,
+        boot_index: None,
+    });
+
+    common::assert_accepted("uefi + sata", Arch::X86_64, &build_qemu_args(&vm));
 }

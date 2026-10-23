@@ -1,4 +1,6 @@
-use crate::config::{Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, VmConfig};
+use crate::config::{
+    Accelerator, Arch, DriveConfig, DriveFormat, DriveInterface, Firmware, VmConfig,
+};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -473,6 +475,120 @@ pub fn build_network_args(net: &crate::config::NetworkConfig) -> Vec<String> {
     args
 }
 
+/// The two files a UEFI machine needs.
+pub struct UefiFirmware {
+    /// Read-only firmware code image.
+    pub code: PathBuf,
+    /// Pristine variable store, copied once per VM.
+    pub vars_template: PathBuf,
+}
+
+/// Locate the UEFI firmware shipped with QEMU.
+///
+/// Deliberately the plain code image, not `edk2-x86_64-secure-code.fd`: with
+/// the stock variable template there are no enrolled keys, so the secure build
+/// would be called Secure Boot while enforcing nothing. QEMU ships no
+/// `edk2-x86_64-vars.fd`; the i386 variable store is the one to use for x86_64
+/// as well.
+pub fn find_uefi_firmware(custom_dir: Option<&Path>) -> Option<UefiFirmware> {
+    const CODE: &str = "edk2-x86_64-code.fd";
+    const VARS: &str = "edk2-i386-vars.fd";
+
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = custom_dir {
+        let base = if dir.is_file() {
+            dir.parent().map(|p| p.to_path_buf())
+        } else {
+            Some(dir.to_path_buf())
+        };
+        if let Some(base) = base {
+            roots.push(base.join("share"));
+            roots.push(base.clone());
+        }
+    }
+    if let Some(bin) = find_qemu_binary(custom_dir, Arch::X86_64) {
+        if let Some(base) = bin.parent() {
+            roots.push(base.join("share"));
+            roots.push(base.to_path_buf());
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        roots.push(PathBuf::from("/usr/share/qemu"));
+        roots.push(PathBuf::from("/usr/share/edk2/x64"));
+        roots.push(PathBuf::from("/usr/share/OVMF"));
+    }
+
+    for root in roots {
+        let code = root.join(CODE);
+        let vars = root.join(VARS);
+        if code.is_file() && vars.is_file() {
+            return Some(UefiFirmware {
+                code,
+                vars_template: vars,
+            });
+        }
+    }
+    None
+}
+
+/// Give this VM its own copy of the UEFI variable store.
+///
+/// Does nothing when the target already exists: that file holds the guest's
+/// boot entries, and replacing it would make an installed system unbootable.
+pub fn prepare_nvram(template: &Path, target: &Path) -> Result<(), String> {
+    if target.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
+        }
+    }
+    std::fs::copy(template, target).map(|_| ()).map_err(|e| {
+        format!(
+            "Failed to copy {} to {}: {}",
+            template.display(),
+            target.display(),
+            e
+        )
+    })
+}
+
+/// Build the firmware arguments for a VM.
+///
+/// UEFI needs the pflash pair, not `-bios`. `-bios` boots the firmware but
+/// discards the variable store, and Windows writes only an NVRAM boot entry —
+/// no `\EFI\BOOT\BOOTX64.EFI` fallback — so an installation completes and then
+/// will not boot.
+///
+/// A UEFI VM whose firmware could not be found emits nothing at all rather
+/// than silently starting as BIOS; the start check reports what is missing.
+pub fn build_firmware_args(fw: &Firmware, uefi: Option<&UefiFirmware>) -> Vec<String> {
+    match fw {
+        Firmware::Bios { rom: None } => Vec::new(),
+        Firmware::Bios { rom: Some(path) } => {
+            vec!["-bios".to_string(), path.display().to_string()]
+        }
+        Firmware::Uefi { nvram } => match uefi {
+            None => Vec::new(),
+            Some(found) => vec![
+                "-drive".to_string(),
+                format!(
+                    "if=pflash,format=raw,unit=0,readonly=on,file={}",
+                    escape_opt_value(&found.code.display().to_string())
+                ),
+                "-drive".to_string(),
+                format!(
+                    "if=pflash,format=raw,unit=1,file={}",
+                    escape_opt_value(&nvram.display().to_string())
+                ),
+            ],
+        },
+    }
+}
+
 /// Construct command-line arguments to launch QEMU for the given `VmConfig`.
 pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
     let mut args = Vec::new();
@@ -516,13 +632,11 @@ pub fn build_qemu_args(vm: &VmConfig) -> Vec<String> {
     // 5. CD-ROMs
     args.extend(build_cdrom_args(&vm.cdroms));
 
-    // 6. BIOS / UEFI
-    if let Some(bios) = &vm.bios_uefi {
-        if !bios.as_os_str().is_empty() {
-            args.push("-bios".to_string());
-            args.push(bios.display().to_string());
-        }
-    }
+    // 6. Firmware
+    args.extend(build_firmware_args(
+        &vm.firmware,
+        find_uefi_firmware(None).as_ref(),
+    ));
 
     // 7. Display and VGA
     let vga_type = vm.display.vga_type.trim();

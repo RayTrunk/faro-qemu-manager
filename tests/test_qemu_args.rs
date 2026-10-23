@@ -1,10 +1,10 @@
 use faro_qem::config::{
-    Accelerator, Arch, DisplayConfig, DriveConfig, DriveFormat, DriveInterface, NetworkConfig,
-    PortForwardRule, VmConfig,
+    Accelerator, Arch, DisplayConfig, DriveConfig, DriveFormat, DriveInterface, Firmware,
+    NetworkConfig, PortForwardRule, VmConfig,
 };
 use faro_qem::qemu::{
-    build_cdrom_args, build_drive_args, build_network_args, build_qemu_args, create_disk_image,
-    find_qemu_binary, find_qemu_img,
+    build_cdrom_args, build_drive_args, build_firmware_args, build_network_args, build_qemu_args,
+    create_disk_image, find_qemu_binary, find_qemu_img, UefiFirmware,
 };
 use std::fs::File;
 use std::path::PathBuf;
@@ -58,7 +58,9 @@ fn test_build_qemu_args_all_components() {
     vm.cpu_cores = 8;
     vm.memory_mb = 8192;
     vm.accel = Accelerator::TCG;
-    vm.bios_uefi = Some(PathBuf::from("/path/to/bios.bin"));
+    vm.firmware = Firmware::Bios {
+        rom: Some(PathBuf::from("/path/to/bios.bin")),
+    };
     vm.cdroms.push(PathBuf::from("/path/to/install.iso"));
     vm.display = DisplayConfig {
         vga_type: "virtio-vga".to_string(),
@@ -381,4 +383,61 @@ fn test_backend_none_disables_networking() {
         ..Default::default()
     };
     assert_eq!(build_network_args(&net), vec!["-nic", "none"]);
+}
+
+#[test]
+fn test_uefi_emits_the_pflash_pair_with_a_per_vm_nvram() {
+    let uefi = UefiFirmware {
+        code: PathBuf::from("share/edk2-x86_64-code.fd"),
+        vars_template: PathBuf::from("share/edk2-i386-vars.fd"),
+    };
+    let fw = Firmware::Uefi {
+        nvram: PathBuf::from("vms/win11/nvram.fd"),
+    };
+    let args = build_firmware_args(&fw, Some(&uefi)).join(" ");
+
+    assert!(
+        args.contains("if=pflash,format=raw,unit=0,readonly=on"),
+        "got: {}",
+        args
+    );
+    assert!(args.contains("edk2-x86_64-code.fd"));
+    assert!(args.contains("if=pflash,format=raw,unit=1"));
+    assert!(args.contains("nvram.fd"));
+    assert!(
+        !args.contains("-bios"),
+        "-bios loses the NVRAM, which is why Windows will not boot after install"
+    );
+    assert!(
+        !args.contains("secure-code"),
+        "we do not claim Secure Boot we cannot enforce"
+    );
+}
+
+#[test]
+fn test_bios_without_a_rom_adds_nothing() {
+    assert!(build_firmware_args(&Firmware::Bios { rom: None }, None).is_empty());
+}
+
+#[test]
+fn test_bios_with_a_rom_uses_minus_bios() {
+    let args = build_firmware_args(
+        &Firmware::Bios {
+            rom: Some(PathBuf::from("my.rom")),
+        },
+        None,
+    );
+    assert_eq!(args, vec!["-bios", "my.rom"]);
+}
+
+// Review Focus 4
+#[test]
+fn test_uefi_without_discovered_firmware_emits_nothing_rather_than_falling_back() {
+    let fw = Firmware::Uefi {
+        nvram: PathBuf::from("n.fd"),
+    };
+    assert!(
+        build_firmware_args(&fw, None).is_empty(),
+        "a UEFI VM must not quietly start as BIOS; the start check reports the missing firmware"
+    );
 }
