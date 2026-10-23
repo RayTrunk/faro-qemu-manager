@@ -6,6 +6,9 @@ use egui::{Color32, Margin, Rounding, Stroke};
 use crate::i18n::I18n;
 use crate::ui::theme::{icons, COLOR_ERROR, COLOR_PRIMARY, COLOR_WARNING, ROUNDING_BUTTON};
 
+/// Tallest the band may get before it starts scrolling instead of growing.
+const MAX_BAND_HEIGHT: f32 = 160.0;
+
 /// How much attention a notice deserves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticeLevel {
@@ -89,26 +92,53 @@ impl<'a> NoticeBar<'a> {
 
         let mut dismissed: Option<usize> = None;
 
-        for (idx, notice) in self.notices.iter().enumerate() {
-            let color = notice.level.color();
-            egui::Frame::none()
-                .fill(color.linear_multiply(0.12))
-                .stroke(Stroke::new(1.0, color))
-                .rounding(Rounding::same(ROUNDING_BUTTON))
-                .inner_margin(Margin::symmetric(10.0, 6.0))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(notice.level.icon()).color(color));
-                        ui.label(egui::RichText::new(&notice.text).size(12.0));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button(i18n.t("notice_dismiss")).clicked() {
-                                dismissed = Some(idx);
-                            }
+        // Capped and scrollable: a band that grows without limit pushes the menu
+        // bar — Exit included — off the window, and the notices below the fold
+        // cannot be dismissed.
+        egui::ScrollArea::vertical()
+            .max_height(MAX_BAND_HEIGHT)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for (idx, notice) in self.notices.iter().enumerate() {
+                    let color = notice.level.color();
+                    egui::Frame::none()
+                        .fill(color.linear_multiply(0.12))
+                        .stroke(Stroke::new(1.0, color))
+                        .rounding(Rounding::same(ROUNDING_BUTTON))
+                        .inner_margin(Margin::symmetric(10.0, 6.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(notice.level.icon()).color(color));
+
+                                // The dismiss button is allocated BEFORE the
+                                // message, so a long message can never push it
+                                // out of the panel; the text then wraps into
+                                // whatever room is left.
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.small_button(i18n.t("notice_dismiss")).clicked() {
+                                            dismissed = Some(idx);
+                                        }
+                                        ui.with_layout(
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(&notice.text)
+                                                            .size(12.0),
+                                                    )
+                                                    .wrap_mode(egui::TextWrapMode::Wrap),
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            });
                         });
-                    });
-                });
-            ui.add_space(4.0);
-        }
+                    ui.add_space(4.0);
+                }
+            });
 
         if let Some(idx) = dismissed {
             self.notices.remove(idx);

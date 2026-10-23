@@ -85,5 +85,7 @@
   "notice_dismiss": "Dismiss",
   "config_corrupt_quarantined": "Could not read {file}. The file was kept at {path} and nothing was overwritten.",
   "config_corrupt_not_quarantined": "Could not read {file}, and it could not be moved aside either ({detail}). The file was left untouched.",
-  "config_save_failed": "Could not save {file}: {detail}"
+  "config_save_failed": "Could not save {file}: {detail}",
+  "config_unreadable_left_alone": "Could not read {file} ({detail}). It was left exactly as it is, and nothing will be written to it this session. Close whatever is using it and start again.",
+  "config_write_blocked": "Did not save {file}: it still holds a configuration that could not be read, and writing over it would destroy that."
 }

@@ -208,3 +208,48 @@ fn test_lenient_loaders_keep_their_old_behaviour() {
         "lenient loader still falls back to defaults"
     );
 }
+
+#[test]
+fn test_recovery_decision_per_failure_kind() {
+    use faro_qem::config::{recovery_for, ConfigRecovery};
+
+    assert_eq!(
+        recovery_for(&ConfigLoadError::Missing),
+        ConfigRecovery::StartFresh
+    );
+    assert_eq!(
+        recovery_for(&ConfigLoadError::Corrupt {
+            detail: "trailing comma".to_string()
+        }),
+        ConfigRecovery::Preserve
+    );
+    assert_eq!(
+        recovery_for(&ConfigLoadError::Unreadable(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "locked"
+        ))),
+        ConfigRecovery::LeaveAlone,
+        "a file we never read may be healthy; renaming it to .corrupt- loses it"
+    );
+}
+
+#[test]
+fn test_staging_file_is_cleaned_up_when_the_write_fails() {
+    let dir = tempdir().unwrap();
+    // A directory at the target: staging writes fine, the rename onto it fails.
+    let target = dir.path().join("vms.json");
+    std::fs::create_dir(&target).unwrap();
+
+    assert!(save_vms(&target, &[VmConfig::new_default("A", Arch::X86_64)]).is_err());
+
+    let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains(".tmp-"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "a failed write must not leave staging files behind, found {:?}",
+        leftovers
+    );
+}

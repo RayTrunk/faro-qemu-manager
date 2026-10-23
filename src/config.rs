@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
@@ -415,14 +416,41 @@ impl fmt::Display for ConfigLoadError {
 
 /// Read a configuration file into a string, separating absence from read errors.
 fn read_config_text(path: &Path) -> Result<String, ConfigLoadError> {
-    if !path.exists() {
-        return Err(ConfigLoadError::Missing);
-    }
-    let content = std::fs::read_to_string(path).map_err(ConfigLoadError::Unreadable)?;
+    // One read decides it, rather than exists() followed by a read. `exists()`
+    // reports false for a permission or I/O error on the stat as well as for a
+    // genuine absence, and "absent" is the one answer that permits writing.
+    let content = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(ConfigLoadError::Missing),
+        Err(e) => return Err(ConfigLoadError::Unreadable(e)),
+    };
+
     if content.trim().is_empty() {
         return Err(ConfigLoadError::Missing);
     }
     Ok(content)
+}
+
+/// What startup should do with a configuration it could not load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigRecovery {
+    /// Nothing was there. Defaults are right, and writing is safe.
+    StartFresh,
+    /// The bytes were read and are not valid. Set the file aside, then write.
+    Preserve,
+    /// The bytes were never seen. The file may be perfectly fine and merely
+    /// locked, so leave it entirely alone — do not rename it, do not write over
+    /// it — and try again next time.
+    LeaveAlone,
+}
+
+/// Decide how to recover from a load failure.
+pub fn recovery_for(why: &ConfigLoadError) -> ConfigRecovery {
+    match why {
+        ConfigLoadError::Missing => ConfigRecovery::StartFresh,
+        ConfigLoadError::Corrupt { .. } => ConfigRecovery::Preserve,
+        ConfigLoadError::Unreadable(_) => ConfigRecovery::LeaveAlone,
+    }
 }
 
 /// Load the list of VMs, reporting why it could not be loaded.
@@ -503,12 +531,32 @@ pub fn quarantine_file(path: &Path) -> Result<PathBuf, String> {
             Some(dir) => dir.join(&name),
             None => PathBuf::from(&name),
         };
-        if target.exists() {
-            continue;
+        // Claim the name before renaming onto it. `fs::rename` replaces an
+        // existing target, so a plain `exists()` check loses the race against
+        // another instance starting on the same file in the same second — and
+        // the copy it clobbered might be the one worth recovering.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(format!(
+                    "Failed to claim {} for {}: {}",
+                    target.display(),
+                    path.display(),
+                    e
+                ))
+            }
         }
+
         return std::fs::rename(path, &target)
             .map(|()| target.clone())
             .map_err(|e| {
+                // Release the claim so the name is not left as an empty decoy.
+                let _ = std::fs::remove_file(&target);
                 format!(
                     "Failed to set {} aside as {}: {}",
                     path.display(),
@@ -557,8 +605,21 @@ fn write_config_file(path: &Path, data: &[u8]) -> Result<(), String> {
     }
 
     let staging = temp_sibling_path(path);
-    std::fs::write(&staging, data)
-        .map_err(|e| format!("Failed to write {}: {}", staging.display(), e))?;
+
+    // Flush to the device before the rename. Without this, a crash or power
+    // loss can leave the target present but zero-length — and a zero-length
+    // file reads as "no configuration", which gets answered with defaults and
+    // no word to the user. The rename alone only protects concurrent readers.
+    let staged = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&staging)?;
+        file.write_all(data)?;
+        file.sync_all()
+    })();
+
+    if let Err(e) = staged {
+        let _ = std::fs::remove_file(&staging);
+        return Err(format!("Failed to write {}: {}", staging.display(), e));
+    }
 
     std::fs::rename(&staging, path).map_err(|e| {
         let _ = std::fs::remove_file(&staging);

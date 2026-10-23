@@ -85,5 +85,7 @@
   "notice_dismiss": "Verwerfen",
   "config_corrupt_quarantined": "{file} konnte nicht gelesen werden. Die Datei wurde unter {path} aufbewahrt, überschrieben wurde nichts.",
   "config_corrupt_not_quarantined": "{file} konnte nicht gelesen und auch nicht beiseitegelegt werden ({detail}). Die Datei blieb unberührt.",
-  "config_save_failed": "{file} konnte nicht gespeichert werden: {detail}"
+  "config_save_failed": "{file} konnte nicht gespeichert werden: {detail}",
+  "config_unreadable_left_alone": "{file} konnte nicht gelesen werden ({detail}). Die Datei wurde unangetastet gelassen, und in dieser Sitzung wird nichts darüber geschrieben. Beende, was sie belegt, und starte neu.",
+  "config_write_blocked": "{file} wurde nicht gespeichert: dort liegt noch eine Konfiguration, die nicht gelesen werden konnte, und sie zu überschreiben würde sie vernichten."
 }

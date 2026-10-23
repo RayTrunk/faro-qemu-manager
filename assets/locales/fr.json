@@ -85,5 +85,7 @@
   "notice_dismiss": "Ignorer",
   "config_corrupt_quarantined": "Impossible de lire {file}. Le fichier a été conservé à {path} et rien n'a été écrasé.",
   "config_corrupt_not_quarantined": "Impossible de lire {file}, et impossible de le mettre de côté ({detail}). Le fichier est resté intact.",
-  "config_save_failed": "Impossible d'enregistrer {file} : {detail}"
+  "config_save_failed": "Impossible d'enregistrer {file} : {detail}",
+  "config_unreadable_left_alone": "Impossible de lire {file} ({detail}). Le fichier a été laissé tel quel et rien n'y sera écrit durant cette session. Fermez ce qui l'utilise puis redémarrez.",
+  "config_write_blocked": "{file} n'a pas été enregistré : il contient encore une configuration illisible, et l'écraser la détruirait."
 }

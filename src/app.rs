@@ -7,8 +7,9 @@ use std::sync::mpsc;
 use uuid::Uuid;
 
 use crate::config::{
-    default_settings_path, default_vms_path, quarantine_file, save_settings, save_vms,
-    try_load_settings, try_load_vms, AppSettings, ConfigLoadError, VmConfig,
+    default_settings_path, default_vms_path, quarantine_file, recovery_for, save_settings,
+    save_vms, try_load_settings, try_load_vms, AppSettings, ConfigLoadError, ConfigRecovery,
+    VmConfig,
 };
 use crate::i18n::I18n;
 use crate::qemu::{
@@ -42,6 +43,11 @@ pub struct FaroQemApp {
     pub logo_texture: Option<egui::TextureHandle>,
     /// Problems the user needs to know about, shown as a band above the menu.
     pub notices: Vec<Notice>,
+    /// The VM list on disk could not be read and is still sitting there.
+    /// Writing to it would destroy it, so every save to that path is refused.
+    pub vms_write_blocked: bool,
+    /// Same barrier for the settings file.
+    pub settings_write_blocked: bool,
 }
 
 /// Short, human-facing name for a configuration path.
@@ -51,30 +57,67 @@ fn file_label(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Set an unreadable configuration file aside and report what happened.
+/// Act on a configuration that could not be loaded, and report what was done.
 ///
-/// The file holds work the user cares about, so it is never replaced. Which of
-/// the two outcomes occurred matters to them: either their bytes are safe at a
-/// named path, or they are still sitting where they were and nothing was done
-/// to them.
-fn preservation_notice(i18n: &I18n, path: &Path, why: &ConfigLoadError) -> Notice {
+/// Returns the notice to show, and whether writes to this path must be refused
+/// for the rest of the session. That second value is the whole point: if the
+/// user's bytes are still sitting at the path, every later write — including
+/// the one on shutdown — would destroy exactly what was just preserved.
+fn recover_config(i18n: &I18n, path: &Path, why: &ConfigLoadError) -> (Option<Notice>, bool) {
     let file = file_label(path);
-    match quarantine_file(path) {
-        Ok(kept) => Notice::error(i18n.tf(
-            "config_corrupt_quarantined",
-            &[
-                ("file", file.as_str()),
-                ("path", kept.display().to_string().as_str()),
-            ],
-        )),
-        Err(e) => Notice::error(i18n.tf(
-            "config_corrupt_not_quarantined",
-            &[
-                ("file", file.as_str()),
-                ("detail", format!("{}: {}", why, e).as_str()),
-            ],
-        )),
+
+    match recovery_for(why) {
+        // Nothing was there. Defaults are right and writing is safe.
+        ConfigRecovery::StartFresh => (None, false),
+
+        ConfigRecovery::Preserve => match quarantine_file(path) {
+            // The bytes are safe elsewhere and the path is free: write away.
+            Ok(kept) => (
+                Some(Notice::error(i18n.tf(
+                    "config_corrupt_quarantined",
+                    &[
+                        ("file", file.as_str()),
+                        ("path", kept.display().to_string().as_str()),
+                    ],
+                ))),
+                false,
+            ),
+            // Could not move it. The bytes are still there, so nothing may
+            // write over them.
+            Err(e) => (
+                Some(Notice::error(i18n.tf(
+                    "config_corrupt_not_quarantined",
+                    &[
+                        ("file", file.as_str()),
+                        ("detail", format!("{}: {}", why, e).as_str()),
+                    ],
+                ))),
+                true,
+            ),
+        },
+
+        // We never saw the bytes, so the file may be perfectly healthy and
+        // merely locked. Renaming it to `.corrupt-` would be a lie and would
+        // bury a good configuration; writing over it would lose it outright.
+        ConfigRecovery::LeaveAlone => (
+            Some(Notice::error(i18n.tf(
+                "config_unreadable_left_alone",
+                &[
+                    ("file", file.as_str()),
+                    ("detail", why.to_string().as_str()),
+                ],
+            ))),
+            true,
+        ),
     }
+}
+
+/// Report a save that was deliberately not attempted.
+fn write_blocked_notice(i18n: &I18n, path: &Path) -> Notice {
+    Notice::error(i18n.tf(
+        "config_write_blocked",
+        &[("file", file_label(path).as_str())],
+    ))
 }
 
 /// Report a configuration file that could not be written.
@@ -115,34 +158,33 @@ impl FaroQemApp {
 
         // Settings come first: the chosen language decides what language the
         // notices below are written in.
-        let settings = match try_load_settings(&settings_path) {
-            Ok(loaded) => loaded,
-            Err(ConfigLoadError::Missing) => AppSettings::default(),
+        let (settings, settings_write_blocked) = match try_load_settings(&settings_path) {
+            Ok(loaded) => (loaded, false),
             Err(why) => {
                 let defaults = AppSettings::default();
-                notices.push(preservation_notice(
-                    &I18n::new(&defaults.language),
-                    &settings_path,
-                    &why,
-                ));
-                defaults
+                let (notice, blocked) =
+                    recover_config(&I18n::new(&defaults.language), &settings_path, &why);
+                notices.extend(notice);
+                (defaults, blocked)
             }
         };
 
         let i18n = I18n::new(&settings.language);
 
-        // An unreadable VM list is the user's data. Preserve it, say so, and
-        // start empty — writing a starter VM here is what used to destroy it.
-        let (mut vms, vms_unreadable) = match try_load_vms(&vms_path) {
-            Ok(loaded) => (loaded, false),
-            Err(ConfigLoadError::Missing) => (Vec::new(), false),
+        // A VM list that exists but could not be loaded is the user's data.
+        // Writing a starter VM over it is precisely what used to destroy it, so
+        // `may_seed` stays false for anything but an absent or readable file.
+        let (mut vms, vms_write_blocked, may_seed) = match try_load_vms(&vms_path) {
+            Ok(loaded) => (loaded, false, true),
             Err(why) => {
-                notices.push(preservation_notice(&i18n, &vms_path, &why));
-                (Vec::new(), true)
+                let may_seed = recovery_for(&why) == ConfigRecovery::StartFresh;
+                let (notice, blocked) = recover_config(&i18n, &vms_path, &why);
+                notices.extend(notice);
+                (Vec::new(), blocked, may_seed)
             }
         };
 
-        if vms.is_empty() && !vms_unreadable {
+        if vms.is_empty() && may_seed {
             let mut default_vm = VmConfig::default();
             default_vm.id = Uuid::new_v4();
             default_vm.name = "Debian 12".to_string();
@@ -186,7 +228,26 @@ impl FaroQemApp {
             confirming_delete_id: None,
             logo_texture,
             notices,
+            vms_write_blocked,
+            settings_write_blocked,
         }
+    }
+
+    /// Add a notice, unless the very same message is already on screen.
+    ///
+    /// One identical failure per click — which is what an unwritable
+    /// configuration directory produces — would otherwise grow a band tall
+    /// enough to push the menu bar, Exit included, off the window.
+    fn push_notice(&mut self, notice: Notice) {
+        const MAX_NOTICES: usize = 5;
+
+        if self.notices.iter().any(|n| n.text == notice.text) {
+            return;
+        }
+        if self.notices.len() >= MAX_NOTICES {
+            self.notices.remove(0);
+        }
+        self.notices.push(notice);
     }
 
     /// Persist the VM list, reporting a failure instead of discarding it.
@@ -194,17 +255,27 @@ impl FaroQemApp {
     /// A silently dropped write means the user's next start quietly loses the
     /// change they just made.
     fn save_vms_now(&mut self) {
+        if self.vms_write_blocked {
+            let notice = write_blocked_notice(&self.i18n, &self.vms_path);
+            self.push_notice(notice);
+            return;
+        }
         if let Err(e) = save_vms(&self.vms_path, &self.vms) {
             let notice = save_failure_notice(&self.i18n, &self.vms_path, &e);
-            self.notices.push(notice);
+            self.push_notice(notice);
         }
     }
 
     /// Persist application settings, reporting a failure instead of discarding it.
     fn save_settings_now(&mut self) {
+        if self.settings_write_blocked {
+            let notice = write_blocked_notice(&self.i18n, &self.settings_path);
+            self.push_notice(notice);
+            return;
+        }
         if let Err(e) = save_settings(&self.settings_path, &self.settings) {
             let notice = save_failure_notice(&self.i18n, &self.settings_path, &e);
-            self.notices.push(notice);
+            self.push_notice(notice);
         }
     }
 
@@ -720,10 +791,16 @@ impl Drop for FaroQemApp {
         for (_id, (mut proc, _)) in self.running_processes.drain() {
             let _ = proc.kill();
         }
-        // Discarded deliberately: the window is going away, so there is no
-        // interface left that could show a notice about a failed write.
-        let _ = save_vms(&self.vms_path, &self.vms);
-        let _ = save_settings(&self.settings_path, &self.settings);
+        // Results are discarded deliberately: the window is going away, so
+        // there is no interface left that could show a notice about a failed
+        // write. The barriers are NOT optional here — this was the last place
+        // that still overwrote a configuration it had promised to preserve.
+        if !self.vms_write_blocked {
+            let _ = save_vms(&self.vms_path, &self.vms);
+        }
+        if !self.settings_write_blocked {
+            let _ = save_settings(&self.settings_path, &self.settings);
+        }
     }
 }
 

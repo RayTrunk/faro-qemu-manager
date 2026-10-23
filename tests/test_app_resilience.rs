@@ -241,3 +241,146 @@ fn test_render_ui_without_notices_draws_no_band() {
         "an empty band must not take up room"
     );
 }
+
+/// Review Focus 4, for real this time: a configuration that exists but cannot
+/// be read, where setting it aside is impossible too. Holding the file with no
+/// sharing is what an on-access virus scanner or an open editor does.
+#[cfg(windows)]
+#[test]
+fn test_config_that_could_not_be_preserved_survives_the_whole_session() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let vms_path = dir.path().join("vms.json");
+    let original = r#"[{"id":"550e8400-e29b-41d4-a716-446655440000","name":"Windows 11 Work","arch":"x86_64","cpu_cores":4,"memory_mb":8192}]"#;
+    std::fs::write(&vms_path, original).unwrap();
+
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&vms_path)
+        .unwrap();
+
+    let mut app = FaroQemApp::with_paths(dir.path().join("settings.json"), vms_path.clone(), None);
+
+    assert!(app.vms.is_empty(), "nothing could be loaded");
+    assert!(
+        app.notices.iter().any(|n| n.level == NoticeLevel::Error),
+        "the user is told"
+    );
+    assert!(
+        quarantined_entries(dir.path()).is_empty(),
+        "a file whose bytes we never saw must not be labelled corrupt"
+    );
+
+    // An ordinary save during the session must not touch it either.
+    app.handle_sidebar_action(faro_qem::ui::sidebar::SidebarAction::NewVm, None);
+
+    drop(lock);
+    drop(app);
+
+    assert_eq!(
+        std::fs::read_to_string(&vms_path).unwrap(),
+        original,
+        "a configuration that could not be preserved must survive the session"
+    );
+}
+
+/// A transient read failure must not rename a healthy configuration to
+/// `.corrupt-`, where the application will never look at it again.
+#[cfg(windows)]
+#[test]
+fn test_unreadable_config_is_not_quarantined() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let vms_path = dir.path().join("vms.json");
+    std::fs::write(&vms_path, "[]").unwrap();
+
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&vms_path)
+        .unwrap();
+
+    let app = FaroQemApp::with_paths(dir.path().join("settings.json"), vms_path.clone(), None);
+    drop(lock);
+
+    assert!(quarantined_entries(dir.path()).is_empty());
+    assert!(vms_path.exists(), "left where it was, for the next attempt");
+    assert!(app.notices.iter().any(|n| n.level == NoticeLevel::Error));
+}
+
+/// The same failure repeated must not pile up into a band that buries the menu.
+#[test]
+fn test_repeated_save_failures_do_not_pile_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = FaroQemApp::with_paths(
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+        None,
+    );
+    app.notices.clear();
+
+    let blocked = dir.path().join("blocked").join("vms.json");
+    std::fs::create_dir_all(&blocked).unwrap();
+    app.vms_path = blocked;
+
+    for _ in 0..30 {
+        app.handle_sidebar_action(faro_qem::ui::sidebar::SidebarAction::NewVm, None);
+    }
+
+    assert!(
+        !app.notices.is_empty(),
+        "the failure is still reported at least once"
+    );
+    assert!(
+        app.notices.len() <= 5,
+        "30 identical failures must not become 30 notices, got {}",
+        app.notices.len()
+    );
+}
+
+/// A long message must stay readable and dismissible at the smallest window
+/// size the application allows (main.rs sets a 880px minimum).
+#[test]
+fn test_long_notice_stays_dismissible_at_minimum_window_width() {
+    let i18n = I18n::new("de");
+    let mut notices = vec![Notice::error(i18n.tf(
+        "config_corrupt_not_quarantined",
+        &[
+            ("file", "vms.json"),
+            (
+                "detail",
+                "Der Prozess kann nicht auf die Datei zugreifen, da sie von einem anderen \
+                 Prozess verwendet wird. (os error 32)",
+            ),
+        ],
+    ))];
+
+    let ctx = Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(880.0, 720.0),
+        )),
+        ..Default::default()
+    };
+    let _ = ctx.run(input.clone(), |ctx| {
+        egui::TopBottomPanel::top("probe").show(ctx, |ui| {
+            NoticeBar::new(&mut notices.clone()).show(ui, &i18n);
+        });
+    });
+    let output = ctx.run(input, |ctx| {
+        egui::TopBottomPanel::top("probe").show(ctx, |ui| {
+            NoticeBar::new(&mut notices).show(ui, &i18n);
+        });
+    });
+
+    let drawn = rendered_text(&output);
+    assert!(
+        drawn.contains(i18n.t("notice_dismiss")),
+        "the dismiss button must be reachable, drew:\n{}",
+        drawn
+    );
+}
