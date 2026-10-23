@@ -497,3 +497,71 @@ fn test_duplicating_a_uefi_vm_gives_the_copy_its_own_variable_store() {
         "and the original is untouched"
     );
 }
+
+/// The whole UEFI path, through the app rather than through a builder.
+///
+/// Every other firmware test checks one piece: that the store is created,
+/// that the arguments are refused without firmware, that the probe accepts a
+/// pflash pair. None of them answers the question the user asks — does the
+/// machine I ticked UEFI for actually start — and for the whole of this
+/// branch the answer was no while every piece passed.
+#[test]
+fn test_a_uefi_machine_made_the_way_the_interface_makes_one_actually_starts() {
+    if faro_qem::qemu::find_qemu_binary(None, Arch::X86_64).is_none() {
+        eprintln!("skipped: no qemu-system-x86_64 on this machine");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let mut app = FaroQemApp::with_paths(
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+        None,
+    );
+    if app.uefi_firmware.is_none() {
+        eprintln!("skipped: no edk2 firmware on this machine");
+        return;
+    }
+
+    let disk = dir.path().join("win11").join("disk.qcow2");
+    std::fs::create_dir_all(disk.parent().unwrap()).unwrap();
+    let img = faro_qem::qemu::find_qemu_img(None).expect("qemu-img sits beside qemu");
+    faro_qem::qemu::create_disk_image(&img, &disk, DriveFormat::Qcow2, 1).unwrap();
+
+    // Exactly what the interface produces: SATA so the installer sees the
+    // disk, and the firmware switch set to UEFI.
+    let mut vm = VmConfig::new_default("Windows 11", Arch::X86_64);
+    vm.memory_mb = 256;
+    vm.drives.push(DriveConfig {
+        path: disk,
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::Sata,
+        boot_index: Some(0),
+    });
+    vm.firmware = Firmware::Uefi {
+        nvram: nvram_path_for(&vm),
+    };
+    // No window, so the suite stays quiet.
+    vm.display.vga_type = "none".to_string();
+    vm.display.display_backend = "none".to_string();
+
+    let id = vm.id;
+    app.vms.push(vm);
+    app.launch_vm(id, None).expect("the machine starts");
+
+    // Give QEMU a moment to reject the arguments if it is going to.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let status = app.status_map.get(&id).cloned();
+    let said = app
+        .console_logs
+        .get(&id)
+        .map(|b| b.all_text())
+        .unwrap_or_default();
+    let _ = app.stop_vm(id);
+
+    assert!(
+        matches!(status, Some(VmStatus::Running { .. })),
+        "status was {:?}, QEMU said:\n{}",
+        status,
+        said
+    );
+}
