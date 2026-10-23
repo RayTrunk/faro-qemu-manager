@@ -98,5 +98,11 @@
   "option_unverified": "unverified — QEMU was not asked",
   "option_substituted": "not available — another accelerator is used at start",
   "forwards_backend_only": "Port forwarding works with user-mode networking only. These rules are kept but not applied.",
-  "template_notice_windows": "Windows 11 refuses to install without TPM 2.0 and Secure Boot, and neither is available here: a virtual TPM needs Unix sockets, which QEMU cannot offer on Windows. When Setup says this PC cannot run Windows 11, press Shift+F10, run regedit, and under HKLM\\SYSTEM\\Setup\\LabConfig create the DWORD values BypassTPMCheck and BypassSecureBootCheck, both set to 1. Then go back and continue."
+  "template_notice_windows": "Windows 11 refuses to install without TPM 2.0 and Secure Boot, and neither is available here: a virtual TPM needs Unix sockets, which QEMU cannot offer on Windows. When Setup says this PC cannot run Windows 11, press Shift+F10, run regedit, and under HKLM\\SYSTEM\\Setup\\LabConfig create the DWORD values BypassTPMCheck and BypassSecureBootCheck, both set to 1. Then go back and continue.",
+  "wizard_title": "New virtual machine",
+  "wizard_empty_tile": "Empty / manual",
+  "wizard_hardware_block": "Hardware & firmware",
+  "wizard_network_block": "Network & port forwarding",
+  "wizard_needs_template": "Pick a template first, or the empty tile",
+  "wizard_needs_name": "The machine needs a name"
 }

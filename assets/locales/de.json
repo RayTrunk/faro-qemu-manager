@@ -98,5 +98,11 @@
   "option_unverified": "ungeprüft — QEMU wurde nicht gefragt",
   "option_substituted": "nicht verfügbar — beim Start wird eine andere Beschleunigung verwendet",
   "forwards_backend_only": "Portweiterleitung funktioniert nur mit Benutzermodus-Netzwerk. Diese Regeln bleiben gespeichert, greifen aber nicht.",
-  "template_notice_windows": "Windows 11 verweigert die Installation ohne TPM 2.0 und Secure Boot, und beides gibt es hier nicht: ein virtuelles TPM braucht Unix-Sockets, die QEMU unter Windows nicht anbieten kann. Wenn das Setup sagt, dieser PC koenne Windows 11 nicht ausfuehren, mit Umschalt+F10 die Eingabeaufforderung oeffnen, regedit starten und unter HKLM\\SYSTEM\\Setup\\LabConfig die DWORD-Werte BypassTPMCheck und BypassSecureBootCheck anlegen, beide auf 1. Dann zurueck und weiter."
+  "template_notice_windows": "Windows 11 verweigert die Installation ohne TPM 2.0 und Secure Boot, und beides gibt es hier nicht: ein virtuelles TPM braucht Unix-Sockets, die QEMU unter Windows nicht anbieten kann. Wenn das Setup sagt, dieser PC koenne Windows 11 nicht ausfuehren, mit Umschalt+F10 die Eingabeaufforderung oeffnen, regedit starten und unter HKLM\\SYSTEM\\Setup\\LabConfig die DWORD-Werte BypassTPMCheck und BypassSecureBootCheck anlegen, beide auf 1. Dann zurueck und weiter.",
+  "wizard_title": "Neue virtuelle Maschine",
+  "wizard_empty_tile": "Leer / manuell",
+  "wizard_hardware_block": "Hardware & Firmware",
+  "wizard_network_block": "Netzwerk & Portweiterleitung",
+  "wizard_needs_template": "Erst eine Vorlage waehlen, oder die leere Kachel",
+  "wizard_needs_name": "Die Maschine braucht einen Namen"
 }

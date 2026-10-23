@@ -7,6 +7,7 @@ pub mod settings;
 pub mod sidebar;
 pub mod theme;
 pub mod vm_detail;
+pub mod wizard;
 
 pub use console::*;
 pub use notice::*;
@@ -14,3 +15,4 @@ pub use settings::*;
 pub use sidebar::*;
 pub use theme::*;
 pub use vm_detail::*;
+pub use wizard::*;

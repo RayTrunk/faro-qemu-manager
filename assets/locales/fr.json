@@ -98,5 +98,11 @@
   "option_unverified": "non vérifié — QEMU n'a pas été interrogé",
   "option_substituted": "non disponible — un autre accélérateur est utilisé au démarrage",
   "forwards_backend_only": "La redirection de ports ne fonctionne qu'avec le réseau en mode utilisateur. Ces règles sont conservées mais non appliquées.",
-  "template_notice_windows": "Windows 11 refuse de s'installer sans TPM 2.0 ni Secure Boot, et aucun des deux n'est disponible ici : un TPM virtuel exige des sockets Unix, que QEMU ne peut pas fournir sous Windows. Lorsque l'installation indique que ce PC ne peut pas executer Windows 11, appuyez sur Maj+F10, lancez regedit et creez sous HKLM\\SYSTEM\\Setup\\LabConfig les valeurs DWORD BypassTPMCheck et BypassSecureBootCheck, toutes deux a 1. Revenez ensuite et continuez."
+  "template_notice_windows": "Windows 11 refuse de s'installer sans TPM 2.0 ni Secure Boot, et aucun des deux n'est disponible ici : un TPM virtuel exige des sockets Unix, que QEMU ne peut pas fournir sous Windows. Lorsque l'installation indique que ce PC ne peut pas executer Windows 11, appuyez sur Maj+F10, lancez regedit et creez sous HKLM\\SYSTEM\\Setup\\LabConfig les valeurs DWORD BypassTPMCheck et BypassSecureBootCheck, toutes deux a 1. Revenez ensuite et continuez.",
+  "wizard_title": "Nouvelle machine virtuelle",
+  "wizard_empty_tile": "Vide / manuel",
+  "wizard_hardware_block": "Materiel et micrologiciel",
+  "wizard_network_block": "Reseau et redirection de ports",
+  "wizard_needs_template": "Choisissez d abord un modele, ou la tuile vide",
+  "wizard_needs_name": "La machine a besoin d un nom"
 }
