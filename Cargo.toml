@@ -1,6 +1,6 @@
 [package]
 name = "faro-qem"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 authors = ["R.Trunk"]
 description = "FARO QEMU MANAGER (C) R.Trunk 2026 - Modern QEMU GUI in Rust"

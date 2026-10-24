@@ -65,6 +65,7 @@
   "light": "Hell",
   "qemu_dir": "QEMU-Programmverzeichnis",
   "close": "Schließen",
+  "version": "Version {version}",
   "add_cdrom": "CD/DVD ISO hinzufügen",
   "action": "Aktion",
   "delete_confirm_msg": "Möchten Sie wirklich löschen",

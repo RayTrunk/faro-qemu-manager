@@ -65,6 +65,7 @@
   "light": "Light",
   "qemu_dir": "QEMU Binary Directory",
   "close": "Close",
+  "version": "Version {version}",
   "add_cdrom": "Add CD/DVD ISO",
   "action": "Action",
   "delete_confirm_msg": "Are you sure you want to delete",

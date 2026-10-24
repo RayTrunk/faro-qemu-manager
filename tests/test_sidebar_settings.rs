@@ -563,3 +563,21 @@ fn test_the_settings_window_does_not_grow_with_a_long_path_in_it() {
         widths
     );
 }
+
+/// Every fault report starts with "which version?". The dialog answers it,
+/// so nobody has to open the file properties of the executable to find out.
+/// The number comes from the package, so a release cannot forget this spot.
+#[test]
+fn test_the_settings_dialog_names_the_version_it_is_running() {
+    let mut settings = AppSettings::default();
+    let mut i18n = I18n::new("en");
+
+    let drawn = common::rendered_settings(&mut settings, &mut i18n);
+
+    assert!(
+        drawn.contains(env!("CARGO_PKG_VERSION")),
+        "the settings dialog never names version {}: {}",
+        env!("CARGO_PKG_VERSION"),
+        drawn
+    );
+}
