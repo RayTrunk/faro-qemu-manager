@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FARO QEMU MANAGER (C) R.Trunk 2026 - Windows installer definition.
+
+  Built by packaging/build-release.ps1, which passes the version and the
+  file paths in so that nothing here can drift from Cargo.toml.
+
+  The UpgradeCode below identifies the product across all its versions.
+  It must never change: Windows uses it to recognise that a new MSI
+  replaces an older install rather than sitting beside it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="FARO QEMU MANAGER"
+           Manufacturer="R.Trunk"
+           Version="$(var.Version)"
+           UpgradeCode="6824611A-D527-4369-8EC4-F6578E6D7B3D"
+           Scope="perMachine"
+           Compressed="yes"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="FARO QEMU MANAGER - QEMU virtual machine manager"
+                        Manufacturer="R.Trunk" />
+
+    <!-- An older install is removed before this one lands, so two
+         versions can never share a Program Files folder. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed. Remove it first if you really want this older one." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/RayTrunk/faro-qemu-manager" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- WixUI_Minimal: one page with the licence and an Install button.
+         The GPL is what the user is agreeing to, so it has to be shown. -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="FARO QEMU MANAGER" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="FARO QEMU MANAGER" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutable">
+        <File Id="FaroExe" Source="$(var.ExeFile)" Name="faro-qem.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut"
+                    Directory="ProgramMenuFolder"
+                    Name="FARO QEMU MANAGER"
+                    Description="Manage QEMU virtual machines"
+                    Icon="AppIcon"
+                    Advertise="yes" />
+        </File>
+      </Component>
+
+      <!-- The GPL requires that the licence travel with the program. -->
+      <Component Id="LicenceFile">
+        <File Source="$(var.LicenseFile)" Name="LICENSE.txt" />
+      </Component>
+
+      <Component Id="ReadmeFile">
+        <File Source="$(var.ReadmeFile)" Name="README.md" />
+      </Component>
+    </ComponentGroup>
+
+  </Package>
+</Wix>

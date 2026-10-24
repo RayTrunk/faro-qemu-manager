@@ -9,3 +9,6 @@ settings.json
 *.img
 FLUX-*.jpeg
 .superpowers/
+
+# Release artefacts, built by packaging/build-release.ps1
+/dist

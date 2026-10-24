@@ -34,6 +34,26 @@ command line for you, and stays out of the way while the guest runs.
   offer.
 - **Three languages:** German, English, French.
 
+## Download
+
+Two shapes, both on the [releases page](https://github.com/RayTrunk/faro-qemu-manager/releases):
+
+- **`FARO-QEMU-MANAGER-<version>-setup.msi`** — the installer. Puts the
+  program in `Program Files`, adds a Start menu entry, and uninstalls
+  through Windows' own list. Keeps its configuration in
+  `%APPDATA%\faro-qem` and its machines in your user folder.
+- **`FARO-QEMU-MANAGER-<version>-portable.zip`** — unpack and run. Because
+  it carries a `portable.txt` next to the executable, *everything* it
+  writes — machine list, settings, and the virtual machines themselves —
+  stays in a `FARO-Data` folder beside it. Nothing touches the host's user
+  profile, so the folder can live on a stick. Delete `portable.txt` and it
+  behaves like an installed copy.
+
+`SHA256SUMS.txt` on the release lets you verify what you downloaded.
+
+Neither package contains QEMU. Install QEMU separately, or point FARO at a
+QEMU folder in the settings.
+
 ## Requirements
 
 - Windows 10 or 11 (the Windows resource and the WHPX accelerator path are

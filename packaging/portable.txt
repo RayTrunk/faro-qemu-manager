@@ -1,0 +1,19 @@
+This file makes FARO QEMU MANAGER portable.
+
+As long as it sits next to faro-qem.exe, everything the program writes --
+your machine list, your settings, and the virtual machines themselves --
+stays in the FARO-Data folder beside it. Nothing is written to this
+computer's user profile, so the whole folder can live on a USB stick and
+travel between machines.
+
+Delete this file and the program behaves like an installed copy: it keeps
+its configuration in %APPDATA%\faro-qem and its machines in your user
+folder.
+
+One warning about travelling: a virtual machine remembers the paths to its
+own disk images and ISOs. If the drive letter changes when you plug the
+stick into another computer, point the machine at its images again -- the
+pre-flight check will tell you which ones it can no longer find.
+
+QEMU itself is not included. Install it on the host, or point FARO at a
+QEMU folder of your own in the settings.

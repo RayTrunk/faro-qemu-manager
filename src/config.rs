@@ -466,8 +466,37 @@ impl Default for AppSettings {
     }
 }
 
+/// The folder a portable copy keeps everything in, or `None` for a normal
+/// installed copy.
+///
+/// A copy meant to travel carries an empty marker file called
+/// `portable.txt` next to the executable; the data then lives in
+/// `FARO-Data` beside it and the host machine keeps no trace. An installed
+/// copy has no marker and must keep writing to the user's profile --
+/// otherwise an update would strand every machine the user already has.
+///
+/// The marker must be a *file*. A directory of that name is somebody's
+/// folder, not an instruction.
+pub fn portable_root(exe_dir: &Path) -> Option<PathBuf> {
+    let marker = exe_dir.join("portable.txt");
+    if marker.is_file() {
+        return Some(exe_dir.join("FARO-Data"));
+    }
+    None
+}
+
+/// `portable_root` asked of the running executable's own directory.
+fn portable_root_of_this_program() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    portable_root(dir)
+}
+
 /// Resolve the default directory for application configurations
 pub fn default_config_dir() -> PathBuf {
+    if let Some(portable) = portable_root_of_this_program() {
+        return portable;
+    }
     #[cfg(target_os = "windows")]
     {
         if let Some(appdata) = std::env::var_os("APPDATA") {
@@ -503,6 +532,13 @@ pub fn default_settings_path() -> PathBuf {
 /// `debian_12.qcow2` in the project directory from exactly that.
 pub fn default_vm_dir() -> PathBuf {
     const FOLDER: &str = "FARO-VMs";
+
+    // A portable copy takes its machines along. Leaving them in the user's
+    // profile would make a "portable" copy that is portable in name only:
+    // unplug the stick and the machines stay behind on the host.
+    if let Some(portable) = portable_root_of_this_program() {
+        return portable.join(FOLDER);
+    }
 
     #[cfg(target_os = "windows")]
     if let Some(profile) = std::env::var_os("USERPROFILE") {

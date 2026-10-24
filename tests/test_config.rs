@@ -315,3 +315,43 @@ fn test_settings_without_a_vm_dir_fall_back_to_the_default() {
     );
     assert_eq!(settings.vm_dir_or_default(), default_vm_dir());
 }
+
+/// A copy of FARO meant to travel on a stick carries a marker file next to
+/// the executable. Everything it writes then stays in that folder, so the
+/// program leaves nothing behind on the host it was plugged into.
+#[test]
+fn test_a_marker_beside_the_program_keeps_the_data_with_it() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("portable.txt"), b"").unwrap();
+
+    assert_eq!(
+        faro_qem::config::portable_root(dir.path()),
+        Some(dir.path().join("FARO-Data")),
+        "a folder with the marker should keep its data beside the program"
+    );
+}
+
+/// An installed copy has no marker and must keep writing to the user's
+/// profile. Were that to change, an update would strand every machine the
+/// user already has.
+#[test]
+fn test_without_a_marker_the_program_writes_where_it_always_did() {
+    let dir = tempdir().unwrap();
+
+    assert_eq!(
+        faro_qem::config::portable_root(dir.path()),
+        None,
+        "without the marker nothing may be written beside the program"
+    );
+}
+
+/// The marker only counts as a file. A folder of that name -- or anything
+/// else that happens to be called that -- is not an instruction to write
+/// into the program's own directory.
+#[test]
+fn test_a_folder_named_like_the_marker_is_not_a_marker() {
+    let dir = tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("portable.txt")).unwrap();
+
+    assert_eq!(faro_qem::config::portable_root(dir.path()), None);
+}
