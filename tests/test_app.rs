@@ -1360,8 +1360,11 @@ fn test_launching_puts_a_qmp_port_on_the_command_line() {
         return;
     }
     let dir = tempdir().unwrap();
-    let mut app = common::app_with_vm_dir(dir.path());
-    let id = common::push_startable_vm(&mut app, dir.path());
+    // A subdirectory, so the app's own files land inside the temporary
+    // directory rather than beside it -- see app_with_vm_dir.
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = common::push_startable_vm(&mut app, &root);
     app.launch_vm(id, None).unwrap();
     let cli = app.cli_previews.get(&id).unwrap().clone();
     // The port the app remembers has to be the port the guest was started
@@ -1386,8 +1389,11 @@ fn test_shutdown_asks_the_guest_and_shows_that_it_is_waiting() {
         return;
     }
     let dir = tempdir().unwrap();
-    let mut app = common::app_with_vm_dir(dir.path());
-    let id = common::push_startable_vm(&mut app, dir.path());
+    // A subdirectory, so the app's own files land inside the temporary
+    // directory rather than beside it -- see app_with_vm_dir.
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = common::push_startable_vm(&mut app, &root);
     app.launch_vm(id, None).unwrap();
 
     let outcome = app.shutdown_vm(id);
@@ -1426,8 +1432,11 @@ fn test_a_vm_without_a_qmp_port_is_not_quietly_killed() {
         return;
     }
     let dir = tempdir().unwrap();
-    let mut app = common::app_with_vm_dir(dir.path());
-    let id = common::push_startable_vm(&mut app, dir.path());
+    // A subdirectory, so the app's own files land inside the temporary
+    // directory rather than beside it -- see app_with_vm_dir.
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = common::push_startable_vm(&mut app, &root);
     app.launch_vm(id, None).unwrap();
     app.drop_qmp_port(id); // what an older state file looks like
 
@@ -1447,8 +1456,11 @@ fn test_force_stop_is_the_second_step_and_it_works() {
         return;
     }
     let dir = tempdir().unwrap();
-    let mut app = common::app_with_vm_dir(dir.path());
-    let id = common::push_startable_vm(&mut app, dir.path());
+    // A subdirectory, so the app's own files land inside the temporary
+    // directory rather than beside it -- see app_with_vm_dir.
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = common::push_startable_vm(&mut app, &root);
     app.launch_vm(id, None).unwrap();
     app.force_stop_vm(id).unwrap();
     assert!(matches!(app.status_map.get(&id), Some(VmStatus::Stopped)));

@@ -26,6 +26,7 @@ use crate::qemu::{
     UefiFirmware, VmProcess,
 };
 use crate::qmp::{connect_tcp, free_local_port, qmp_args, Greeting, QmpClient};
+use crate::runstate::{self, now_secs, RunRecord};
 use crate::templates::VmTemplate;
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
@@ -56,6 +57,9 @@ pub struct FaroQemApp {
     /// here can only be stopped the hard way, and the interface says so
     /// rather than quietly killing it.
     pub qmp_ports: HashMap<Uuid, u16>,
+    /// Where the list of running machines is kept: `running.json`, beside
+    /// `vms.json` and never inside it (spec section 7.3).
+    pub runstate_path: PathBuf,
     pub cli_previews: HashMap<Uuid, String>,
     pub confirming_delete_id: Option<Uuid>,
     pub logo_texture: Option<egui::TextureHandle>,
@@ -242,6 +246,14 @@ impl FaroQemApp {
     ) -> Self {
         let mut notices: Vec<Notice> = Vec::new();
 
+        // The run state lives beside the machine list, whatever path that
+        // list was given -- a test with its own temporary directory must not
+        // reach into the real configuration directory.
+        let runstate_path = match vms_path.parent() {
+            Some(dir) => dir.join("running.json"),
+            None => PathBuf::from("running.json"),
+        };
+
         // Settings come first: the chosen language decides what language the
         // notices below are written in.
         let (settings, settings_write_blocked) = match try_load_settings(&settings_path) {
@@ -325,6 +337,7 @@ impl FaroQemApp {
             running_processes: HashMap::new(),
             status_map: HashMap::new(),
             qmp_ports: HashMap::new(),
+            runstate_path,
             cli_previews: HashMap::new(),
             confirming_delete_id: None,
             logo_texture,
@@ -971,8 +984,10 @@ impl FaroQemApp {
         for id in exited_ids {
             self.running_processes.remove(&id);
             // The monitor died with the process; a port left behind here
-            // would offer a shutdown that cannot reach anything.
+            // would offer a shutdown that cannot reach anything, and a
+            // record left behind would be a ghost at the next start.
             self.qmp_ports.remove(&id);
+            self.forget_running(id);
         }
 
         if repaint_requested {
@@ -1078,6 +1093,7 @@ impl FaroQemApp {
                 let pid = proc.pid();
                 self.running_processes.insert(id, (proc, rx));
                 self.status_map.insert(id, VmStatus::Running { pid });
+                self.record_running(id, pid);
                 let log_buf = self.console_logs.entry(id).or_default();
                 log_buf.push_system(format!("[PROCESS] QEMU started with PID {}", pid));
                 self.active_tab = DetailTab::Console;
@@ -1099,6 +1115,55 @@ impl FaroQemApp {
     /// Whether this application still holds the machine's process.
     pub fn is_attached(&self, id: Uuid) -> bool {
         self.running_processes.contains_key(&id)
+    }
+
+    /// Where this machine's console log lives.
+    ///
+    /// Inside the machine's own folder when it has one, so the log goes
+    /// when the folder goes; otherwise under `logs/` beside the
+    /// configuration, named after the machine.
+    pub fn log_path_for(&self, id: Uuid) -> PathBuf {
+        if let Some(folder) = find_vm_folders(&self.settings.vm_dir_or_default(), id).pop() {
+            return folder.join("console.log");
+        }
+        let base = self
+            .runstate_path
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_default();
+        base.join("logs").join(format!("{}.log", id))
+    }
+
+    /// Note this machine in the run state file, so the next start of the
+    /// application can find it again.
+    ///
+    /// A failure is reported on the machine's console and nowhere else: the
+    /// guest is running, and a scratch file that could not be written is no
+    /// reason to tell the user their machine failed.
+    fn record_running(&mut self, id: Uuid, pid: u32) {
+        let Some(&qmp_port) = self.qmp_ports.get(&id) else {
+            // Nothing to reattach to without a monitor, and a record
+            // claiming otherwise would offer a shutdown that cannot work.
+            return;
+        };
+        let record = RunRecord {
+            vm_id: id,
+            pid,
+            qmp_port,
+            started_at: now_secs(),
+            log: self.log_path_for(id),
+        };
+        if let Err(e) = runstate::put(&self.runstate_path, record) {
+            self.console_logs
+                .entry(id)
+                .or_default()
+                .push_error(format!("[STATE] {}", e));
+        }
+    }
+
+    /// Drop this machine from the run state file.
+    fn forget_running(&mut self, id: Uuid) {
+        let _ = runstate::remove(&self.runstate_path, id);
     }
 
     /// Forget this machine's monitor port.
@@ -1176,6 +1241,7 @@ impl FaroQemApp {
     /// a shutdown that did not finish or on a machine that has no monitor.
     pub fn force_stop_vm(&mut self, id: Uuid) -> Result<(), String> {
         self.qmp_ports.remove(&id);
+        self.forget_running(id);
         if let Some((mut proc, _)) = self.running_processes.remove(&id) {
             let res = proc.kill();
             let log_buf = self.console_logs.entry(id).or_default();

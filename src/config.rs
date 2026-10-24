@@ -899,7 +899,7 @@ fn temp_sibling_path(path: &Path) -> PathBuf {
 /// complete new one — never a truncated one. Writing straight to the target
 /// would empty it before refilling it, and a crash or a reader in that window
 /// would find a torn configuration.
-fn write_config_file(path: &Path, data: &[u8]) -> Result<(), String> {
+pub(crate) fn write_config_file(path: &Path, data: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
             std::fs::create_dir_all(parent)

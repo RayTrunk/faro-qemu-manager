@@ -294,8 +294,15 @@ pub fn concat_sources(dir: &str) -> String {
 
 /// An app whose VM folders go into `vm_dir`.
 ///
-/// Used from three test files, which is why it lives here rather than being
+/// Used from four test files, which is why it lives here rather than being
 /// copied into each.
+///
+/// The app's own files -- `settings.json`, `vms.json`, and since part 4
+/// `running.json` -- land in the **parent** of `vm_dir`. Pass a
+/// subdirectory of the temporary directory (`dir.path().join("vms")`),
+/// never `dir.path()` itself: that would put them in the system temporary
+/// directory, shared with every other test and every other run, and the
+/// run state would then accumulate machines from runs long gone.
 pub fn app_with_vm_dir(vm_dir: &Path) -> faro_qem::app::FaroQemApp {
     let parent = vm_dir.parent().unwrap_or(vm_dir);
     let mut app = faro_qem::app::FaroQemApp::with_paths(
