@@ -2,9 +2,11 @@
 // Application State Integration & Main Controller
 
 use std::collections::HashMap;
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 use uuid::Uuid;
 
 use crate::config::{
@@ -23,6 +25,7 @@ use crate::qemu::{
     nvram_path_for, prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent,
     UefiFirmware, VmProcess,
 };
+use crate::qmp::{connect_tcp, free_local_port, qmp_args, Greeting, QmpClient};
 use crate::templates::VmTemplate;
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
@@ -48,6 +51,11 @@ pub struct FaroQemApp {
     pub console_logs: HashMap<Uuid, ConsoleLogBuffer>,
     pub running_processes: HashMap<Uuid, (VmProcess, mpsc::Receiver<QemuEvent>)>,
     pub status_map: HashMap<Uuid, VmStatus>,
+    /// The QMP port each running machine was started with. This is what
+    /// makes a graceful shutdown possible at all; a machine missing from
+    /// here can only be stopped the hard way, and the interface says so
+    /// rather than quietly killing it.
+    pub qmp_ports: HashMap<Uuid, u16>,
     pub cli_previews: HashMap<Uuid, String>,
     pub confirming_delete_id: Option<Uuid>,
     pub logo_texture: Option<egui::TextureHandle>,
@@ -316,6 +324,7 @@ impl FaroQemApp {
             console_logs: HashMap::new(),
             running_processes: HashMap::new(),
             status_map: HashMap::new(),
+            qmp_ports: HashMap::new(),
             cli_previews: HashMap::new(),
             confirming_delete_id: None,
             logo_texture,
@@ -615,7 +624,10 @@ impl FaroQemApp {
         }
         self.download_status.remove(&id);
 
-        let _ = self.stop_vm(id);
+        // Deleting a machine takes its process with it: the files are about
+        // to go, so asking the guest to shut down politely has nothing left
+        // to shut down onto.
+        let _ = self.force_stop_vm(id);
         self.status_map.remove(&id);
         self.console_logs.remove(&id);
         self.cli_previews.remove(&id);
@@ -958,6 +970,9 @@ impl FaroQemApp {
 
         for id in exited_ids {
             self.running_processes.remove(&id);
+            // The monitor died with the process; a port left behind here
+            // would offer a shutdown that cannot reach anything.
+            self.qmp_ports.remove(&id);
         }
 
         if repaint_requested {
@@ -1025,7 +1040,7 @@ impl FaroQemApp {
             }
         }
 
-        let args = match build_qemu_args(&vm, self.uefi_firmware.as_ref()) {
+        let mut args = match build_qemu_args(&vm, self.uefi_firmware.as_ref()) {
             Ok(args) => args,
             Err(err_msg) => {
                 self.status_map.insert(id, VmStatus::Error(err_msg.clone()));
@@ -1034,6 +1049,26 @@ impl FaroQemApp {
                 return Err(err_msg);
             }
         };
+
+        // The monitor the shutdown button speaks through. The port is asked
+        // for, never chosen: on this host whole ranges refuse to be bound.
+        // Failing to find one is not a reason to refuse the machine -- it
+        // starts, and the panel then says that only the hard stop is left.
+        self.qmp_ports.remove(&id);
+        match free_local_port() {
+            Ok(port) => {
+                args.extend(qmp_args(port));
+                self.qmp_ports.insert(id, port);
+            }
+            Err(e) => {
+                let log_buf = self.console_logs.entry(id).or_default();
+                log_buf.push_error(format!(
+                    "[QMP] no monitor for this machine: {} -- only a hard stop will be available",
+                    e
+                ));
+            }
+        }
+
         let cli_str = format!("{} {}", bin_path.display(), shell_words::join(&args));
         self.cli_previews.insert(id, cli_str);
 
@@ -1061,8 +1096,86 @@ impl FaroQemApp {
         }
     }
 
-    /// Stop a virtual machine by ID
-    pub fn stop_vm(&mut self, id: Uuid) -> Result<(), String> {
+    /// Whether this application still holds the machine's process.
+    pub fn is_attached(&self, id: Uuid) -> bool {
+        self.running_processes.contains_key(&id)
+    }
+
+    /// Forget this machine's monitor port.
+    ///
+    /// What a machine started by an older version of the application looks
+    /// like, and what happens when no port could be found. The guest keeps
+    /// running; only the graceful path is gone.
+    pub fn drop_qmp_port(&mut self, id: Uuid) {
+        self.qmp_ports.remove(&id);
+    }
+
+    /// Ask the guest to shut itself down.
+    ///
+    /// This is what the stop button does, and it never kills (spec section
+    /// 7.1). Without a monitor, or when the monitor does not answer, the
+    /// machine is left exactly as it was and the reason is returned so the
+    /// interface can say it -- silently falling back to killing would make a
+    /// liar of the button.
+    pub fn shutdown_vm(&mut self, id: Uuid) -> Result<(), String> {
+        let Some(&port) = self.qmp_ports.get(&id) else {
+            let reason = self.i18n.t("shutdown_unavailable").to_string();
+            self.console_logs.entry(id).or_default().push_error(&reason);
+            return Err(reason);
+        };
+
+        let (mut client, greeting) = match connect_qmp(port) {
+            Ok(pair) => pair,
+            Err(e) => {
+                let reason = format!("127.0.0.1:{}: {}", port, e);
+                self.console_logs
+                    .entry(id)
+                    .or_default()
+                    .push_error(format!("[QMP] {}", reason));
+                return Err(reason);
+            }
+        };
+
+        if let Err(e) = client.powerdown() {
+            self.console_logs
+                .entry(id)
+                .or_default()
+                .push_error(format!("[QMP] system_powerdown refused: {}", e));
+            return Err(e);
+        }
+
+        let pid = self
+            .status_map
+            .get(&id)
+            .and_then(|s| s.pid())
+            .or_else(|| self.running_processes.get(&id).map(|(p, _)| p.pid()))
+            .unwrap_or(0);
+        self.status_map.insert(
+            id,
+            VmStatus::ShuttingDown {
+                pid,
+                since: SystemTime::now(),
+            },
+        );
+
+        let log_buf = self.console_logs.entry(id).or_default();
+        log_buf.push_system(format!(
+            "[QMP] shutdown requested of QEMU {}.{}.{}",
+            greeting.major, greeting.minor, greeting.micro
+        ));
+        // What the machine itself reported, not what we assume it did.
+        for event in client.take_events() {
+            log_buf.push_system(format!("[QMP] {}", event));
+        }
+        Ok(())
+    }
+
+    /// Pull the plug on a virtual machine.
+    ///
+    /// The second, named step: the user asked for this one explicitly, after
+    /// a shutdown that did not finish or on a machine that has no monitor.
+    pub fn force_stop_vm(&mut self, id: Uuid) -> Result<(), String> {
+        self.qmp_ports.remove(&id);
         if let Some((mut proc, _)) = self.running_processes.remove(&id) {
             let res = proc.kill();
             let log_buf = self.console_logs.entry(id).or_default();
@@ -1114,8 +1227,13 @@ impl FaroQemApp {
             VmDetailAction::Launch(id) => {
                 let _ = self.launch_vm(id, ctx);
             }
-            VmDetailAction::Stop(id) => {
-                let _ = self.stop_vm(id);
+            VmDetailAction::Shutdown(id) => {
+                // The reason is already on the machine's console; nothing is
+                // killed when this fails.
+                let _ = self.shutdown_vm(id);
+            }
+            VmDetailAction::ForceStop(id) => {
+                let _ = self.force_stop_vm(id);
             }
             VmDetailAction::Save(_id) => {
                 self.save_vms_now();
@@ -1283,12 +1401,34 @@ impl FaroQemApp {
                     if ui
                         .add_enabled(
                             has_vm && is_running,
-                            egui::Button::new(format!("{} {}", icons::STOP, self.i18n.t("stop"))),
+                            egui::Button::new(format!(
+                                "{} {}",
+                                icons::STOP,
+                                self.i18n.t("shutdown")
+                            )),
                         )
                         .clicked()
                     {
                         if let Some(id) = self.selected_vm_id {
-                            menu_detail_action = Some(VmDetailAction::Stop(id));
+                            menu_detail_action = Some(VmDetailAction::Shutdown(id));
+                        }
+                        ui.close_menu();
+                    }
+                    // The hard way is its own entry here too, never a
+                    // fallback hidden behind the one above.
+                    if ui
+                        .add_enabled(
+                            has_vm && is_running,
+                            egui::Button::new(format!(
+                                "{} {}",
+                                icons::STOP,
+                                self.i18n.t("force_stop")
+                            )),
+                        )
+                        .clicked()
+                    {
+                        if let Some(id) = self.selected_vm_id {
+                            menu_detail_action = Some(VmDetailAction::ForceStop(id));
                         }
                         ui.close_menu();
                     }
@@ -1422,6 +1562,10 @@ impl FaroQemApp {
                         .map(|s| s.is_running())
                         .unwrap_or(false);
                     let pid = self.status_map.get(&id).and_then(|s| s.pid());
+                    let shutting_down_since = self
+                        .status_map
+                        .get(&id)
+                        .and_then(|s| s.shutting_down_since());
                     let cli_cmd = self.cli_previews.get(&id).map(|s| s.as_str());
                     let qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref());
                     let findings = self.findings_for(&self.vms[pos]);
@@ -1442,6 +1586,7 @@ impl FaroQemApp {
                     .with_logo(self.logo_texture.as_ref())
                     .with_capabilities(&self.capabilities)
                     .with_firmware(self.uefi_firmware.is_some())
+                    .with_shutdown(self.qmp_ports.contains_key(&id), shutting_down_since)
                     .with_findings(&findings);
 
                     if let Some(p) = pid {
@@ -1558,6 +1703,32 @@ impl FaroQemApp {
                 });
             self.about_open = is_open;
         }
+    }
+}
+
+/// How long to keep trying to reach a machine's monitor.
+///
+/// A monitor that is there answers in well under a millisecond, so this
+/// budget is not paid in normal use; it covers the moment right after a
+/// start, when QEMU has been handed the port but has not finished binding
+/// it. A connection to a port nothing is listening on is refused at once
+/// rather than hanging, which is why retrying -- not a single long timeout
+/// -- is what bounds this.
+const QMP_CONNECT_BUDGET: Duration = Duration::from_secs(2);
+
+/// Reach a machine's monitor, giving a just-started QEMU time to be there.
+fn connect_qmp(port: u16) -> Result<(QmpClient<TcpStream>, Greeting), String> {
+    let deadline = Instant::now() + QMP_CONNECT_BUDGET;
+    loop {
+        match connect_tcp(port, QMP_CONNECT_BUDGET) {
+            Ok(pair) => return Ok(pair),
+            Err(e) => {
+                if Instant::now() >= deadline {
+                    return Err(e);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 

@@ -28,6 +28,7 @@ pub struct Greeting {
 pub struct QmpClient<T: Read + Write> {
     reader: BufReader<T>,
     written: String,
+    events: Vec<String>,
 }
 
 impl<T: Read + Write> QmpClient<T> {
@@ -40,6 +41,7 @@ impl<T: Read + Write> QmpClient<T> {
         let mut client = Self {
             reader: BufReader::new(transport),
             written: String::new(),
+            events: Vec::new(),
         };
 
         let line = client.read_line()?;
@@ -78,6 +80,16 @@ impl<T: Read + Write> QmpClient<T> {
         &self.written
     }
 
+    /// The events the server reported along the way, and forget them.
+    ///
+    /// They are not replies, but they are the machine's own account of what
+    /// it did — `POWERDOWN` is the proof that the request arrived. Dropping
+    /// them would leave the console silent at the one moment the user is
+    /// watching it.
+    pub fn take_events(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.events)
+    }
+
     fn send_and_read(&mut self, command: &str) -> Result<serde_json::Value, String> {
         let request = format!("{{\"execute\":\"{}\"}}\n", command);
         self.reader
@@ -97,6 +109,10 @@ impl<T: Read + Write> QmpClient<T> {
             let line = self.read_line()?;
             let value: serde_json::Value = serde_json::from_str(&line)
                 .map_err(|e| format!("{}: {} in {:?}", command, e, line))?;
+            if let Some(event) = value.get("event").and_then(|e| e.as_str()) {
+                self.events.push(event.to_string());
+                continue;
+            }
             if value.get("event").is_some() {
                 continue;
             }

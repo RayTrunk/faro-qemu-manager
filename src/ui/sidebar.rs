@@ -11,7 +11,7 @@ use crate::i18n::I18n;
 use crate::ui::theme::{
     card_frame, danger_button, icons, status_badge, status_badge_interactive, COLOR_ACCENT,
     COLOR_DARK_SURFACE_HOVER, COLOR_ERROR, COLOR_LIGHT_SURFACE_HOVER, COLOR_PRIMARY, COLOR_RUNNING,
-    COLOR_STOPPED, ROUNDING_BADGE,
+    COLOR_STOPPED, COLOR_WARNING, ROUNDING_BADGE,
 };
 
 /// Actions emitted by the sidebar navigation and toolbar
@@ -37,17 +37,38 @@ pub enum VmStatus {
     Running {
         pid: u32,
     },
+    /// The guest has been asked to power down and has not finished.
+    ///
+    /// The process is still there, so this counts as running: starting the
+    /// machine a second time would put a second QEMU on one disk image.
+    /// `since` is what the panel measures to decide when to put the hard way
+    /// on screen beside the waiting.
+    ShuttingDown {
+        pid: u32,
+        since: std::time::SystemTime,
+    },
     Error(String),
 }
 
 impl VmStatus {
     pub fn is_running(&self) -> bool {
-        matches!(self, VmStatus::Running { .. })
+        matches!(
+            self,
+            VmStatus::Running { .. } | VmStatus::ShuttingDown { .. }
+        )
     }
 
     pub fn pid(&self) -> Option<u32> {
         match self {
-            VmStatus::Running { pid } => Some(*pid),
+            VmStatus::Running { pid } | VmStatus::ShuttingDown { pid, .. } => Some(*pid),
+            _ => None,
+        }
+    }
+
+    /// Since when this machine has been shutting down, when it is.
+    pub fn shutting_down_since(&self) -> Option<std::time::SystemTime> {
+        match self {
+            VmStatus::ShuttingDown { since, .. } => Some(*since),
             _ => None,
         }
     }
@@ -62,6 +83,7 @@ impl std::fmt::Display for VmStatus {
         match self {
             VmStatus::Stopped => write!(f, "Stopped"),
             VmStatus::Running { pid } => write!(f, "Running (PID: {})", pid),
+            VmStatus::ShuttingDown { pid, .. } => write!(f, "Shutting down (PID: {})", pid),
             VmStatus::Error(err) => write!(f, "Error: {}", err),
         }
     }
@@ -324,6 +346,13 @@ impl<'a> SidebarView<'a> {
                                                             ui,
                                                             &format!("{} {}", icons::PLAY, pid),
                                                             COLOR_RUNNING,
+                                                        );
+                                                    }
+                                                    VmStatus::ShuttingDown { .. } => {
+                                                        status_badge(
+                                                            ui,
+                                                            self.i18n.t("status_shutting_down"),
+                                                            COLOR_WARNING,
                                                         );
                                                     }
                                                     VmStatus::Stopped => {

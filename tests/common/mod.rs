@@ -307,6 +307,42 @@ pub fn app_with_vm_dir(vm_dir: &Path) -> faro_qem::app::FaroQemApp {
     app
 }
 
+/// Whether this machine has a QEMU for the usual architecture.
+///
+/// Tests that start a real guest skip without one rather than fail: the
+/// absence of QEMU is a fact about the machine, not about the code.
+pub fn qemu_missing() -> bool {
+    faro_qem::qemu::find_qemu_binary(None, Arch::X86_64).is_none()
+}
+
+/// A machine that really starts, pushed into the app's list.
+///
+/// A small qcow2 made by `qemu-img` so the start check finds its disk, SATA
+/// so it looks like what the wizard produces, and no display at all so the
+/// suite stays quiet. BIOS rather than UEFI, so the test does not also
+/// depend on edk2 being installed.
+pub fn push_startable_vm(app: &mut faro_qem::app::FaroQemApp, dir: &Path) -> uuid::Uuid {
+    use faro_qem::config::{DriveConfig, DriveInterface, VmConfig};
+
+    let disk = dir.join(format!("startable-{}.qcow2", uuid::Uuid::new_v4()));
+    make_empty_qcow2(&disk);
+
+    let mut vm = VmConfig::new_default("startable", Arch::X86_64);
+    vm.memory_mb = 256;
+    vm.drives.push(DriveConfig {
+        path: disk,
+        format: DriveFormat::Qcow2,
+        interface: DriveInterface::Sata,
+        boot_index: Some(0),
+    });
+    vm.display.vga_type = "none".to_string();
+    vm.display.display_backend = "none".to_string();
+
+    let id = vm.id;
+    app.vms.push(vm);
+    id
+}
+
 /// Everything the settings dialog draws, after a layout pass.
 pub fn rendered_settings(
     settings: &mut faro_qem::config::AppSettings,

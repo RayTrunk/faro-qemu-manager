@@ -65,7 +65,10 @@ fn test_i18n_rich_catalog_keys_present_in_all_locales() {
         "app_copyright",
         // Actions
         "launch",
-        "stop",
+        // Two stop paths, named apart since part 4: one asks the guest, the
+        // other pulls the plug.
+        "shutdown",
+        "force_stop",
         "save",
         "delete",
         "duplicate",

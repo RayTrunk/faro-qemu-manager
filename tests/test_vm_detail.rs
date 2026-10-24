@@ -3,6 +3,7 @@
 
 use egui::Context;
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 use faro_qem::config::{
@@ -13,7 +14,7 @@ use faro_qem::i18n::I18n;
 use faro_qem::qemu::QemuCapabilities;
 use faro_qem::ui::{
     offered_accelerators, offered_machine_types, offered_netdev_backends, CreateDiskState,
-    DetailTab, VmDetailAction, VmDetailView,
+    DetailTab, VmDetailAction, VmDetailView, VmStatus, SHUTDOWN_GRACE,
 };
 
 mod common;
@@ -23,16 +24,21 @@ fn test_vm_detail_action_variants_and_helpers() {
     let id = Uuid::new_v4();
 
     let launch = VmDetailAction::Launch(id);
-    let stop = VmDetailAction::Stop(id);
+    let shutdown = VmDetailAction::Shutdown(id);
+    let force = VmDetailAction::ForceStop(id);
     let save = VmDetailAction::Save(id);
 
     assert_eq!(launch.vm_id(), id);
-    assert_eq!(stop.vm_id(), id);
+    assert_eq!(shutdown.vm_id(), id);
+    assert_eq!(force.vm_id(), id);
     assert_eq!(save.vm_id(), id);
 
     assert_eq!(launch, VmDetailAction::Launch(id));
-    assert_ne!(launch, stop);
-    assert_ne!(stop, save);
+    assert_ne!(launch, shutdown);
+    assert_ne!(shutdown, save);
+    // The two stop paths are different things, and nothing may treat one as
+    // the other: spec section 7.1.
+    assert_ne!(shutdown, force);
 }
 
 #[test]
@@ -729,4 +735,95 @@ fn test_a_panel_without_findings_draws_none_of_them() {
     let _ = draw();
     let drawn = common::rendered_text(&draw());
     assert!(!drawn.contains("NO DISK AT"));
+}
+
+// --------------------------------------------------------------------------
+// Part 4, task 2: shutdown first, the hard way as a second, named step
+// --------------------------------------------------------------------------
+
+/// Everything the panel draws for a machine in this state.
+///
+/// `qmp_available` says whether a graceful path exists at all: without one
+/// the panel has to say so rather than offer a button that would kill.
+fn render_detail_with_status(status: VmStatus, qmp_available: bool, i18n: &I18n) -> String {
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let since = match &status {
+        VmStatus::ShuttingDown { since, .. } => Some(*since),
+        _ => None,
+    };
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(
+                    &mut vm,
+                    status.is_running(),
+                    i18n,
+                    &mut active,
+                    None,
+                    &mut modal,
+                )
+                .with_shutdown(qmp_available, since)
+                .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    common::rendered_text(&draw())
+}
+
+#[test]
+fn test_the_panel_offers_shutdown_first_and_force_only_while_waiting() {
+    let i18n = I18n::new("en");
+    let drawn = render_detail_with_status(VmStatus::Running { pid: 1 }, true, &i18n);
+    assert!(drawn.contains(i18n.t("shutdown")), "drew:\n{}", drawn);
+    assert!(
+        !drawn.contains(i18n.t("force_stop")),
+        "the hard way is a second step, drew:\n{}",
+        drawn
+    );
+
+    let since = SystemTime::now() - SHUTDOWN_GRACE - Duration::from_secs(1);
+    let drawn = render_detail_with_status(VmStatus::ShuttingDown { pid: 1, since }, true, &i18n);
+    assert!(drawn.contains(i18n.t("shutting_down")), "drew:\n{}", drawn);
+    assert!(drawn.contains(i18n.t("force_stop")), "drew:\n{}", drawn);
+}
+
+#[test]
+fn test_a_guest_still_within_the_grace_period_is_not_offered_the_plug() {
+    // Review Focus 2 cuts both ways: the hard way must appear for a hanging
+    // guest, and must not tempt anyone while a normal shutdown is running.
+    let i18n = I18n::new("en");
+    let drawn = render_detail_with_status(
+        VmStatus::ShuttingDown {
+            pid: 1,
+            since: SystemTime::now(),
+        },
+        true,
+        &i18n,
+    );
+    assert!(drawn.contains(i18n.t("shutting_down")), "drew:\n{}", drawn);
+    assert!(
+        !drawn.contains(i18n.t("force_stop")),
+        "a guest given one second has not hung yet, drew:\n{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_a_vm_that_cannot_shut_down_gracefully_says_so_in_the_panel() {
+    let i18n = I18n::new("en");
+    let drawn = render_detail_with_status(VmStatus::Running { pid: 1 }, false, &i18n);
+    assert!(
+        drawn.contains(i18n.t("shutdown_unavailable")),
+        "drew:\n{}",
+        drawn
+    );
+    assert!(
+        drawn.contains(i18n.t("force_stop")),
+        "and offers the hard way, drew:\n{}",
+        drawn
+    );
 }

@@ -268,7 +268,7 @@ fn test_faro_qem_app_stop_vm_cleans_up_process() {
     app.status_map
         .insert(vm_id, VmStatus::Running { pid: 7777 });
 
-    let res = app.stop_vm(vm_id);
+    let res = app.force_stop_vm(vm_id);
     assert!(res.is_ok());
     assert_eq!(app.status_map.get(&vm_id), Some(&VmStatus::Stopped));
     assert!(!app.running_processes.contains_key(&vm_id));
@@ -757,7 +757,7 @@ fn test_a_uefi_machine_made_the_way_the_interface_makes_one_actually_starts() {
         .get(&id)
         .map(|b| b.all_text())
         .unwrap_or_default();
-    let _ = app.stop_vm(id);
+    let _ = app.force_stop_vm(id);
 
     assert!(
         matches!(status, Some(VmStatus::Running { .. })),
@@ -1346,4 +1346,111 @@ fn test_deleting_a_machine_stops_its_download() {
         !app.downloads.contains_key(&id),
         "the handle goes with the machine"
     );
+}
+
+// --------------------------------------------------------------------------
+// Part 4, task 2: the stop button shuts the guest down; killing is a second,
+// named step
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_launching_puts_a_qmp_port_on_the_command_line() {
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(dir.path());
+    let id = common::push_startable_vm(&mut app, dir.path());
+    app.launch_vm(id, None).unwrap();
+    let cli = app.cli_previews.get(&id).unwrap().clone();
+    // The port the app remembers has to be the port the guest was started
+    // with: a shutdown aimed at any other one reaches nothing. The preview
+    // quotes the argument, so the port is checked, not the quoting.
+    let port = *app
+        .qmp_ports
+        .get(&id)
+        .expect("a started machine has a monitor port");
+    let _ = app.force_stop_vm(id);
+    assert!(
+        cli.contains("-qmp") && cli.contains(&format!("tcp:127.0.0.1:{},server=on,wait=off", port)),
+        "got: {}",
+        cli
+    );
+}
+
+#[test]
+fn test_shutdown_asks_the_guest_and_shows_that_it_is_waiting() {
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(dir.path());
+    let id = common::push_startable_vm(&mut app, dir.path());
+    app.launch_vm(id, None).unwrap();
+
+    let outcome = app.shutdown_vm(id);
+    let status = app.status_map.get(&id).cloned();
+    let attached = app.is_attached(id);
+    let said = app
+        .console_logs
+        .get(&id)
+        .map(|b| b.all_text())
+        .unwrap_or_default();
+    let _ = app.force_stop_vm(id);
+
+    outcome.expect("the guest is asked to power down");
+    assert!(
+        matches!(status, Some(VmStatus::ShuttingDown { .. })),
+        "got: {:?}",
+        status
+    );
+    // A guest with no operating system acts on nothing: the process stays,
+    // which is exactly the hanging-guest case of Review Focus 2.
+    assert!(attached, "the process must still be there");
+    // QEMU answers system_powerdown with a POWERDOWN event before its
+    // return, and what the machine said belongs in its console.
+    assert!(
+        said.contains("POWERDOWN"),
+        "the console must show what QEMU reported, said:\n{}",
+        said
+    );
+}
+
+#[test]
+fn test_a_vm_without_a_qmp_port_is_not_quietly_killed() {
+    // Spec section 7.1: a button that says shutdown never pulls the plug.
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(dir.path());
+    let id = common::push_startable_vm(&mut app, dir.path());
+    app.launch_vm(id, None).unwrap();
+    app.drop_qmp_port(id); // what an older state file looks like
+
+    let outcome = app.shutdown_vm(id);
+    let attached = app.is_attached(id);
+    let _ = app.force_stop_vm(id);
+
+    let err = outcome.expect_err("without QMP there is no graceful path");
+    assert!(!err.is_empty(), "the reason has to reach the user");
+    assert!(attached, "the guest must still be running");
+}
+
+#[test]
+fn test_force_stop_is_the_second_step_and_it_works() {
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(dir.path());
+    let id = common::push_startable_vm(&mut app, dir.path());
+    app.launch_vm(id, None).unwrap();
+    app.force_stop_vm(id).unwrap();
+    assert!(matches!(app.status_map.get(&id), Some(VmStatus::Stopped)));
+    assert!(!app.is_attached(id));
 }
