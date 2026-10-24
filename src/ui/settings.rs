@@ -18,6 +18,10 @@ pub struct SettingsDialog<'a> {
     /// every frame it is open, and the file system does not change between
     /// two frames (spec section 7.2).
     pub detected_qemu: Option<&'a Path>,
+    /// Whether the QEMU directory field has been typed in since it was
+    /// last reported. The caller owns it: this dialog is built anew for
+    /// every frame, so a flag of its own would forget on the next one.
+    pub qemu_dir_edited: Option<&'a mut bool>,
 }
 
 impl<'a> SettingsDialog<'a> {
@@ -28,12 +32,19 @@ impl<'a> SettingsDialog<'a> {
             settings,
             i18n,
             detected_qemu: None,
+            qemu_dir_edited: None,
         }
     }
 
     /// Tell the dialog which emulator the application found.
     pub fn with_detected_qemu(mut self, detected: Option<&'a Path>) -> Self {
         self.detected_qemu = detected;
+        self
+    }
+
+    /// Lend the dialog the caller's memory of an unfinished edit.
+    pub fn editing_qemu_dir(mut self, edited: &'a mut bool) -> Self {
+        self.qemu_dir_edited = Some(edited);
         self
     }
 
@@ -240,6 +251,12 @@ impl<'a> SettingsDialog<'a> {
                         .desired_width(desired_width),
                 );
 
+                // Kept in the settings on every keystroke, but reported as
+                // modified only when the field is done: the application
+                // answers `modified` by probing QEMU, which starts five
+                // processes and takes the better part of a second. Doing
+                // that per keystroke froze the window for as long as it
+                // took to type a path.
                 if resp.changed() {
                     let trimmed = dir_str.trim();
                     self.settings.qemu_dir = if trimmed.is_empty() {
@@ -247,6 +264,18 @@ impl<'a> SettingsDialog<'a> {
                     } else {
                         Some(PathBuf::from(trimmed))
                     };
+                    if let Some(edited) = self.qemu_dir_edited.as_deref_mut() {
+                        *edited = true;
+                    } else {
+                        // No memory lent: report at once rather than lose it.
+                        modified = true;
+                    }
+                }
+                let edited_before = self.qemu_dir_edited.as_deref().copied().unwrap_or(false);
+                if resp.lost_focus() && edited_before {
+                    if let Some(edited) = self.qemu_dir_edited.as_deref_mut() {
+                        *edited = false;
+                    }
                     modified = true;
                 }
 

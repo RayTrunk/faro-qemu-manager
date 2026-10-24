@@ -446,3 +446,28 @@ fn test_a_filtered_console_draws_only_the_matching_lines() {
         drawn
     );
 }
+
+#[test]
+fn test_a_filter_without_a_single_match_says_so() {
+    // It used to draw an empty black field with no word about why.
+    let ctx = Context::default();
+    let i18n = I18n::new("en");
+    let mut logs = ConsoleLogBuffer::new();
+    logs.push_stdout("SeaBIOS rel-1.16.3");
+    logs.filter = "kernel panic".to_string();
+
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ConsoleView::new(&mut logs, &i18n).is_running(true).show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains("kernel panic"),
+        "the filter that hid everything has to be named, drew:\n{}",
+        drawn
+    );
+}

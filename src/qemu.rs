@@ -994,20 +994,45 @@ pub const LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// process are exactly the lines someone would be looking for. QEMU's
 /// output is a handful of lines per start, so the cost is nothing.
 struct VmLog {
-    file: std::sync::Mutex<std::fs::File>,
+    /// The open file and how many bytes it holds, under one lock: the size
+    /// decides when to start over, and two threads must not disagree about
+    /// it.
+    file: std::sync::Mutex<(std::fs::File, u64)>,
+    /// Where it lives, for the rotation.
+    path: PathBuf,
     /// Whether the one complaint about an unwritable log has been made.
     complained: AtomicBool,
 }
 
 impl VmLog {
     fn write_line(&self, line: &str, tx: &Sender<QemuEvent>) {
-        let Ok(mut file) = self.file.lock() else {
+        let Ok(mut guard) = self.file.lock() else {
             return;
         };
         use std::io::Write;
+
+        // The cap has to hold while the machine runs, not only when it
+        // starts. A guest left up for weeks is exactly the case Review
+        // Focus 5 names, and a handle opened on an empty file would
+        // otherwise grow for as long as the machine lives.
+        if guard.1 >= LOG_MAX_BYTES {
+            match rotate_log(&self.path) {
+                Ok(fresh) => *guard = (fresh, 0),
+                Err(e) => {
+                    if !self.complained.swap(true, Ordering::SeqCst) {
+                        let _ = tx.send(QemuEvent::Error(format!("Log rotation failed: {}", e)));
+                    }
+                }
+            }
+        }
+
+        let (file, written) = &mut *guard;
         let wrote = file
             .write_all(line.as_bytes())
             .and_then(|_| file.write_all(b"\n"));
+        if wrote.is_ok() {
+            *written += line.len() as u64 + 1;
+        }
         if let Err(e) = wrote {
             // Once, not once per line: a full disk would otherwise turn the
             // console into a wall of the same complaint.
@@ -1030,20 +1055,32 @@ fn previous_log_path(path: &Path) -> PathBuf {
 /// One predecessor is kept, under `<name>.1`, and the one before that is
 /// dropped: the point of the cap is a bounded amount of disk, which a
 /// growing numbered collection would not be.
-fn open_log(path: &Path) -> Result<std::fs::File, String> {
+fn open_log(path: &Path) -> Result<(std::fs::File, u64), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
         }
     }
 
-    if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) >= LOG_MAX_BYTES {
-        let previous = previous_log_path(path);
-        // Windows refuses to rename onto an existing file.
-        let _ = std::fs::remove_file(&previous);
-        std::fs::rename(path, &previous).map_err(|e| format!("{}: {}", previous.display(), e))?;
+    let held = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if held >= LOG_MAX_BYTES {
+        return rotate_log(path).map(|file| (file, 0));
     }
 
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(|e| format!("{}: {}", path.display(), e))?;
+    Ok((file, held))
+}
+
+/// Move a full log aside and begin a fresh one.
+fn rotate_log(path: &Path) -> Result<std::fs::File, String> {
+    let previous = previous_log_path(path);
+    // Windows refuses to rename onto an existing file.
+    let _ = std::fs::remove_file(&previous);
+    std::fs::rename(path, &previous).map_err(|e| format!("{}: {}", previous.display(), e))?;
     std::fs::OpenOptions::new()
         .append(true)
         .create(true)
@@ -1096,8 +1133,9 @@ pub fn spawn_qemu(
     // matters more than its record.
     let vm_log = match log {
         Some(path) => match open_log(path) {
-            Ok(file) => Some(Arc::new(VmLog {
-                file: std::sync::Mutex::new(file),
+            Ok((file, held)) => Some(Arc::new(VmLog {
+                file: std::sync::Mutex::new((file, held)),
+                path: path.to_path_buf(),
                 complained: AtomicBool::new(false),
             })),
             Err(e) => {

@@ -181,6 +181,36 @@ fn test_a_real_qemu_reports_back_the_uuid_it_was_given() {
 }
 
 #[test]
+fn test_quit_really_ends_a_real_qemu() {
+    // The hard way for a machine that is nobody's child. If QEMU did not
+    // take this, the only thing left would be taskkill on a recorded
+    // process number -- which is what must never happen.
+    let Some(bin) = find_qemu_binary(None, Arch::X86_64) else {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    };
+    let port = free_local_port().unwrap();
+    let mut child = common::spawn_paused_qemu(&bin, &qmp_args(port));
+
+    let (mut client, _) = connect_tcp(port, Duration::from_secs(5)).expect("the monitor answers");
+    client.quit().expect("QEMU takes quit");
+    drop(client);
+
+    // It has to really be gone, not merely have answered politely.
+    let mut ended = false;
+    for _ in 0..50 {
+        if let Ok(Some(_)) = child.try_wait() {
+            ended = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(ended, "quit has to end the process, not just reply");
+}
+
+#[test]
 fn test_a_real_qemu_answers_three_handshakes_in_a_row() {
     // The reattach of Task 6 stands or falls on this: QEMU's QMP server must
     // take a new client after the previous one is gone.

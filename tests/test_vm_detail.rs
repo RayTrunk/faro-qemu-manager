@@ -309,6 +309,7 @@ fn test_create_disk_modal_validation_and_rendering() {
         format: DriveFormat::Qcow2,
         size_gb: 40,
         status_msg: Some(Err("Path is required".to_string())),
+        busy: false,
     };
 
     let _ = ctx.run(Default::default(), |ctx| {

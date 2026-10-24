@@ -272,6 +272,35 @@ impl ConsoleLogBuffer {
         &self.entries[start..end]
     }
 
+    /// How many lines `needle` admits, without building a list.
+    pub fn matching_count(&self, needle: &str) -> usize {
+        if needle.is_empty() {
+            return self.entries.len();
+        }
+        let needle = needle.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|e| e.lower.contains(&needle))
+            .count()
+    }
+
+    /// One window of the lines `needle` admits.
+    ///
+    /// What a scrolled view asks for: the rows egui says are on screen,
+    /// taken straight from the buffer without a list of all the others.
+    pub fn matching_rows(&self, needle: &str, first: usize, count: usize) -> Vec<&LogEntry> {
+        if needle.is_empty() {
+            return self.visible_slice(first, count).iter().collect();
+        }
+        let needle = needle.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|e| e.lower.contains(&needle))
+            .skip(first)
+            .take(count)
+            .collect()
+    }
+
     /// The lines containing `needle`, compared without regard to case.
     ///
     /// Matched against the lower-cased copy each line carries, so a filter
@@ -463,7 +492,7 @@ impl<'a> ConsoleView<'a> {
                 let count_str = if self.logs.filter.is_empty() {
                     format!("{} {}", self.logs.len(), lines_suffix)
                 } else {
-                    let matching = self.logs.matching(&self.logs.filter).len();
+                    let matching = self.logs.matching_count(&self.logs.filter);
                     format!("{}/{} {}", matching, self.logs.len(), lines_suffix)
                 };
                 ui.label(egui::RichText::new(count_str).size(12.0).weak());
@@ -545,24 +574,33 @@ impl<'a> ConsoleView<'a> {
             // one short string per frame is nothing beside what the filter
             // used to cost.
             let filter = self.logs.filter.clone();
-            let admitted = self.logs.matching(&filter).len();
-            let row_height = ui.text_style_height(&egui::TextStyle::Monospace).max(14.0)
-                + 2.0
-                + ui.spacing().item_spacing.y;
+            // Counted without keeping a list: the rows themselves are taken
+            // inside the closure, for the handful egui asks for.
+            let admitted = self.logs.matching_count(&filter);
+            // `show_rows` adds the item spacing itself, so this is the
+            // height of one row's content and nothing more. Two pixels for
+            // the badge frame's margin, which is the tallest thing in a row.
+            let row_height = ui.text_style_height(&egui::TextStyle::Monospace).max(14.0) + 2.0;
 
-            scroll.show_rows(ui, row_height, admitted, |ui, range| {
+            scroll.show_rows(ui, row_height, admitted.max(1), |ui, range| {
                 ui.set_width(ui.available_width());
                 // Only the rows egui says are on screen: a five-thousand
                 // line console used to lay out all five thousand of them.
-                let rows: Vec<&LogEntry> = self
-                    .logs
-                    .matching(&filter)
-                    .into_iter()
-                    .skip(range.start)
-                    .take(range.len())
-                    .collect();
+                let rows = self.logs.matching_rows(&filter, range.start, range.len());
 
-                if self.logs.is_empty() {
+                if admitted == 0 && !self.logs.is_empty() {
+                    // A filter nobody matches used to draw an empty black
+                    // field with no word about why.
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(
+                            self.i18n.tf("console_no_match", &[("filter", &filter)]),
+                        )
+                        .monospace()
+                        .size(12.0)
+                        .color(Color32::from_rgb(120, 125, 135)),
+                    );
+                } else if self.logs.is_empty() {
                     ui.add_space(30.0);
                     ui.vertical_centered(|ui| {
                         ui.label(
@@ -621,6 +659,9 @@ impl<'a> ConsoleView<'a> {
                             });
 
                             // Selectable Text Line
+                            // No wrapping: a row has one line's height, and
+                            // a wrapped line would overlap the next. The
+                            // console scrolls sideways for long lines.
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(&entry.text)
@@ -628,6 +669,7 @@ impl<'a> ConsoleView<'a> {
                                         .size(12.0)
                                         .color(entry.level.color()),
                                 )
+                                .wrap_mode(egui::TextWrapMode::Extend)
                                 .selectable(true),
                             );
                         });

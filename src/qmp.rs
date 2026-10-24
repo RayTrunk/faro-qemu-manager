@@ -90,6 +90,16 @@ impl<T: Read + Write> QmpClient<T> {
             .ok_or_else(|| format!("no UUID in the answer: {}", reply))
     }
 
+    /// End the machine now, through its own monitor.
+    ///
+    /// The hard way for a machine this application did not start: it has no
+    /// process handle for one, and a recorded process number is not an
+    /// identity. Going through the monitor means the thing that dies is the
+    /// thing that just proved who it was.
+    pub fn quit(&mut self) -> Result<(), String> {
+        self.execute("quit").map(|_| ())
+    }
+
     /// Everything sent to the server so far. For tests.
     pub fn wrote(&self) -> &str {
         &self.written

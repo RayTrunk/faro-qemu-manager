@@ -109,6 +109,10 @@ pub struct CreateDiskState {
     pub format: DriveFormat,
     pub size_gb: u32,
     pub status_msg: Option<Result<String, String>>,
+    /// Whether qemu-img is working on this request right now. The dialog
+    /// stays open and says so, rather than vanishing and leaving the answer
+    /// -- "created", or the reason it failed -- with nobody to read it.
+    pub busy: bool,
 }
 
 impl Default for CreateDiskState {
@@ -119,6 +123,7 @@ impl Default for CreateDiskState {
             format: DriveFormat::Qcow2,
             size_gb: 20,
             status_msg: None,
+            busy: false,
         }
     }
 }

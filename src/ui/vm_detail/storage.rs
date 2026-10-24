@@ -389,7 +389,7 @@ impl<'a> VmDetailView<'a> {
                     let create_btn =
                         egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("create")))
                             .fill(COLOR_PRIMARY);
-                    if ui.add(create_btn).clicked() {
+                    if ui.add_enabled(!self.disk_modal.busy, create_btn).clicked() {
                         let trimmed = self.disk_modal.path_buf.trim();
                         if trimmed.is_empty() {
                             self.disk_modal.status_msg =
@@ -411,6 +411,7 @@ impl<'a> VmDetailView<'a> {
                             });
                             self.disk_modal.status_msg =
                                 Some(Ok(self.i18n.t("disk_creating").to_string()));
+                            self.disk_modal.busy = true;
                         }
                     }
 
@@ -420,7 +421,12 @@ impl<'a> VmDetailView<'a> {
                 });
             });
 
-        if !is_open || close_modal || action.is_some() {
+        // Not closed on dispatch: the status line lives in this dialog, and
+        // a dialog that vanishes takes "created" and the reason for a
+        // failure with it. The application closes it once the image is
+        // there (spec section 4: a write that failed must be said, not
+        // swallowed).
+        if !is_open || close_modal {
             self.disk_modal.open = false;
         }
         action

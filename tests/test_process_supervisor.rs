@@ -502,6 +502,54 @@ fn test_a_log_past_the_cap_is_rotated_once_not_endless() {
 }
 
 #[test]
+fn test_a_log_that_fills_up_while_the_machine_runs_is_rotated_too() {
+    // Review Focus 5 names the log of a machine that has been **running** a
+    // long time. The cap used to be checked only when the file was opened,
+    // so a handle taken on an empty file grew without end for the whole
+    // life of the machine.
+    let Some(py) = get_python_bin() else {
+        eprintln!("skipped: no python to produce a flood of lines");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("vm.log");
+    // Just under the cap, so a few lines push it over while the process
+    // writes -- without moving eight megabytes through the pipe.
+    std::fs::write(&log, vec![b'x'; (LOG_MAX_BYTES - 512) as usize]).unwrap();
+
+    let script = "import time, sys\n\
+                  for i in range(400): sys.stdout.write('line %d of the flood\\n' % i)\n\
+                  sys.stdout.flush()\n\
+                  time.sleep(30)\n";
+    let (tx, rx) = mpsc::channel();
+    let mut proc = spawn_qemu(
+        &py,
+        &["-u".to_string(), "-c".to_string(), script.to_string()],
+        tx,
+        Some(&log),
+    )
+    .expect("python starts");
+
+    drain_events(&rx);
+    std::thread::sleep(Duration::from_millis(600));
+    let size = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(u64::MAX);
+    let kept = dir.path().join("vm.log.1");
+    let kept_size = std::fs::metadata(&kept).map(|m| m.len()).unwrap_or(0);
+    let _ = proc.kill();
+
+    assert!(
+        size < LOG_MAX_BYTES,
+        "the running machine's log must start over, got {} bytes",
+        size
+    );
+    assert!(
+        kept_size >= LOG_MAX_BYTES - 512,
+        "and what it held is kept once, got {} bytes",
+        kept_size
+    );
+}
+
+#[test]
 fn test_only_one_previous_log_is_kept() {
     // "Rotated once" means one predecessor, not a growing collection: two
     // capped files on the disk are already one too many.
