@@ -9,6 +9,13 @@ use crate::i18n::I18n;
 use crate::ui::theme::{apply_theme, icons, COLOR_RUNNING, COLOR_WARNING};
 
 /// Modal dialog for application settings
+/// How wide the settings dialog is, in points.
+///
+/// Fixed on purpose. Everything inside measures against this number, so
+/// nothing in the dialog can push the dialog, and a long path cannot make
+/// the window creep across the screen.
+const SETTINGS_WIDTH: f32 = 520.0;
+
 pub struct SettingsDialog<'a> {
     pub open: &'a mut bool,
     pub settings: &'a mut AppSettings,
@@ -59,11 +66,18 @@ impl<'a> SettingsDialog<'a> {
         let mut is_open = *self.open;
         let mut close_requested = false;
 
+        // A fixed width, not a suggested one. This dialog holds a field
+        // whose width is derived from the space available to it, and the
+        // space available to it used to be derived from the width of the
+        // dialog -- which is derived from its content. That circle grew the
+        // window by thirteen pixels per frame, for as long as it was open.
         let window = egui::Window::new(format!("{} {}", icons::SETTINGS, self.i18n.t("settings")))
             .open(&mut is_open)
             .resizable(false)
             .collapsible(false)
-            .default_size(egui::vec2(480.0, 360.0))
+            .min_width(SETTINGS_WIDTH)
+            .max_width(SETTINGS_WIDTH)
+            .default_height(360.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]);
 
         window.show(ctx, |ui| {
@@ -243,7 +257,10 @@ impl<'a> SettingsDialog<'a> {
 
                 let has_path = self.settings.qemu_dir.is_some();
                 let clear_width = if has_path { 28.0 } else { 0.0 };
-                let desired_width = (ui.available_width() - 110.0 - clear_width).max(120.0);
+                // Measured against the dialog's own fixed width, never
+                // against what happens to be left over: the leftover is
+                // what the window is sized from.
+                let desired_width = (SETTINGS_WIDTH - 150.0 - clear_width).max(120.0);
 
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut dir_str)
@@ -312,13 +329,19 @@ impl<'a> SettingsDialog<'a> {
             ui.horizontal(|ui| match self.detected_qemu {
                 Some(bin_path) => {
                     ui.label(egui::RichText::new(icons::CHECK).color(COLOR_RUNNING));
-                    ui.label(
-                        egui::RichText::new(
-                            self.i18n
-                                .tf("qemu_found", &[("path", &bin_path.display().to_string())]),
+                    // Wrapped, because the dialog's width is fixed and a
+                    // path like C:\Program Files\qemu\qemu-system-x86_64.exe
+                    // is longer than it. Two lines beat a clipped one.
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                self.i18n
+                                    .tf("qemu_found", &[("path", &bin_path.display().to_string())]),
+                            )
+                            .size(12.0)
+                            .color(COLOR_RUNNING),
                         )
-                        .size(12.0)
-                        .color(COLOR_RUNNING),
+                        .wrap(),
                     );
                 }
                 None => {
