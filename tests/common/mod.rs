@@ -187,6 +187,35 @@ pub fn rendered_text(output: &egui::FullOutput) -> String {
     out
 }
 
+/// The area egui actually painted this frame.
+///
+/// `rendered_text` answers *what* was drawn; this answers *where*. A
+/// control laid out past the right edge of the window is invisible and
+/// unreachable, and no assertion about text can see that.
+pub fn drawn_bounds(output: &egui::FullOutput) -> egui::Rect {
+    fn walk(shape: &egui::Shape, out: &mut egui::Rect) {
+        match shape {
+            egui::Shape::Text(t) => {
+                *out = out.union(egui::Rect::from_min_size(t.pos, t.galley.size()));
+            }
+            egui::Shape::Rect(r) => {
+                *out = out.union(r.rect);
+            }
+            egui::Shape::Vec(v) => {
+                for s in v {
+                    walk(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = egui::Rect::NOTHING;
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
 /// Keys present in one locale catalogue, read from the file.
 ///
 /// `I18n::t` falls back to English for a missing key, so asking it whether a

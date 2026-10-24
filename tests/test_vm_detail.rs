@@ -828,3 +828,57 @@ fn test_a_vm_that_cannot_shut_down_gracefully_says_so_in_the_panel() {
         drawn
     );
 }
+
+// ---------------------------------------------------------------------------
+// Nothing may be laid out past the right edge of the window
+// ---------------------------------------------------------------------------
+
+/// Where the panel paints, at a given window width.
+fn detail_bounds(width: f32, running: bool, lang: &str) -> (egui::Rect, String) {
+    let i18n = I18n::new(lang);
+    let caps = QemuCapabilities::default();
+    let mut vm = VmConfig::new_default("Debian 12", Arch::X86_64);
+    let mut active = DetailTab::System;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(width, 800.0),
+        )),
+        ..Default::default()
+    };
+    let mut draw = || {
+        ctx.run(input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, running, &i18n, &mut active, None, &mut modal)
+                    .with_capabilities(&caps)
+                    .with_shutdown(true, None)
+                    .show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let out = draw();
+    (common::drawn_bounds(&out), common::rendered_text(&out))
+}
+
+#[test]
+fn test_the_panel_stays_inside_the_window() {
+    // Seen in the running application: the save button sat past the right
+    // edge at every window size, so it could not be clicked at all.
+    for width in [1120.0_f32, 1400.0, 1600.0] {
+        for lang in ["en", "de", "fr"] {
+            let (bounds, drawn) = detail_bounds(width, true, lang);
+            assert!(
+                bounds.max.x <= width + 1.0,
+                "at {} points wide in {}, the panel paints out to {} -- {} points past the edge.\ndrew:\n{}",
+                width,
+                lang,
+                bounds.max.x,
+                bounds.max.x - width,
+                drawn
+            );
+        }
+    }
+}

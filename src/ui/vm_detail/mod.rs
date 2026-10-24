@@ -26,6 +26,14 @@ use crate::ui::theme::{
     COLOR_WARNING, ROUNDING_BUTTON,
 };
 
+/// The same colour, quieter.
+///
+/// Used where something should be recognisable as belonging to the accent
+/// without competing with the one action that carries it.
+fn tinted(color: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+}
+
 /// How long a guest is given before the hard way appears beside the waiting.
 ///
 /// Twenty seconds: long enough that a machine shutting down normally never
@@ -453,9 +461,10 @@ impl<'a> VmDetailView<'a> {
                     let save_btn = egui::Button::new(
                         egui::RichText::new(format!("{} {}", icons::SAVE, self.i18n.t("save")))
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(COLOR_PRIMARY),
                     )
-                    .fill(COLOR_PRIMARY);
+                    .fill(Color32::TRANSPARENT)
+                    .stroke(Stroke::new(1.0, tinted(COLOR_PRIMARY, 150)));
                     if ui.add(save_btn).clicked() {
                         action = Some(VmDetailAction::Save(self.vm.id));
                     }
@@ -493,14 +502,26 @@ impl<'a> VmDetailView<'a> {
                         status_badge(ui, "STOPPED", COLOR_STOPPED);
                     }
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Wrapping, not overflowing. Right-aligned groups that
+                    // do not fit used to be laid out past the right edge of
+                    // the window -- and egui does not paint what lies
+                    // outside, so the save button was simply not there. With
+                    // a wrap, a group that runs out of room moves to the
+                    // next line and stays reachable.
+                    let actions =
+                        egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true);
+                    ui.with_layout(actions, |ui| {
                         // 1. [💾 Save] (rightmost)
+                        // Outlined, not filled: starting a machine is the
+                        // one thing this row is for, and three filled
+                        // buttons side by side name no first among them.
                         let save_btn = egui::Button::new(
                             egui::RichText::new(format!("{} {}", icons::SAVE, self.i18n.t("save")))
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(COLOR_PRIMARY),
                         )
-                        .fill(COLOR_PRIMARY)
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::new(1.0, tinted(COLOR_PRIMARY, 150)))
                         .min_size(egui::vec2(80.0, 28.0));
                         if ui.add(save_btn).clicked() {
                             action = Some(VmDetailAction::Save(self.vm.id));
@@ -647,12 +668,17 @@ impl<'a> VmDetailView<'a> {
             for (tab, icon, title) in tab_items {
                 let is_selected = *self.active_tab == tab;
                 let text = format!("{} {}", icon, title);
+                // The chosen tab is marked, not shouted: a solid accent
+                // fill made it as loud as the one real action on the
+                // screen, and two things shouting is one thing too many.
                 let btn = if is_selected {
-                    egui::Button::new(egui::RichText::new(text).strong().color(Color32::WHITE))
-                        .fill(COLOR_PRIMARY)
+                    egui::Button::new(egui::RichText::new(text).strong().color(COLOR_PRIMARY))
+                        .fill(tinted(COLOR_PRIMARY, 46))
+                        .stroke(Stroke::new(1.0, tinted(COLOR_PRIMARY, 150)))
                         .min_size(egui::vec2(95.0, 28.0))
                 } else {
                     egui::Button::new(egui::RichText::new(text).color(ui.visuals().text_color()))
+                        .fill(Color32::TRANSPARENT)
                         .min_size(egui::vec2(95.0, 28.0))
                 };
 
@@ -662,7 +688,7 @@ impl<'a> VmDetailView<'a> {
             }
         });
 
-        ui.add_space(4.0);
+        ui.add_space(8.0);
         ui.separator();
         ui.add_space(8.0);
 
