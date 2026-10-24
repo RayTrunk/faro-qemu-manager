@@ -1455,6 +1455,137 @@ fn test_a_vm_without_a_qmp_port_is_not_quietly_killed() {
 }
 
 // --------------------------------------------------------------------------
+// Part 4, task 7: nothing expensive happens while drawing a frame
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_no_qemu_search_happens_while_drawing() {
+    // Spec section 7.2: searching the file system for QEMU meant a handful
+    // of `is_file` calls per frame, sixty times a second.
+    let app_src = std::fs::read_to_string("src/app.rs").unwrap();
+    let drawing = app_src
+        .split("fn render_ui(")
+        .nth(1)
+        .expect("render_ui is the frame entry");
+    assert!(
+        !drawing.contains("find_qemu_img("),
+        "src/app.rs searches for qemu-img while drawing"
+    );
+    assert!(
+        !drawing.contains("find_qemu_binary("),
+        "src/app.rs searches for QEMU while drawing"
+    );
+
+    // The settings dialog is nothing but drawing.
+    let settings = std::fs::read_to_string("src/ui/settings.rs").unwrap();
+    assert!(
+        !settings.contains("find_qemu_binary("),
+        "the settings dialog searches while drawing"
+    );
+
+    let detail = common::concat_sources("src/ui/vm_detail");
+    assert!(
+        !detail.contains("find_qemu_img("),
+        "the per-frame fallback in the detail panel is still there"
+    );
+}
+
+#[test]
+fn test_the_resolved_qemu_img_comes_from_the_chosen_directory() {
+    // Resolved once, and again when the directory changes -- never per
+    // frame. The plan's version pointed the setting at an empty directory
+    // and expected the answer to change, but the search falls back to PATH
+    // and the standard locations, where this machine really has a QEMU.
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let before = app.qemu_img.clone();
+
+    let chosen = dir.path().join("chosen");
+    std::fs::create_dir_all(&chosen).unwrap();
+    for name in ["qemu-img", "qemu-img.exe"] {
+        std::fs::write(chosen.join(name), b"not really a binary").unwrap();
+    }
+    app.settings.qemu_dir = Some(chosen.clone());
+    app.refresh_capabilities();
+
+    assert_ne!(
+        app.qemu_img, before,
+        "changing the directory is what re-resolves it"
+    );
+    assert_eq!(
+        app.qemu_img.as_ref().and_then(|p| p.parent()),
+        Some(chosen.as_path()),
+        "and the answer comes from the chosen directory, got: {:?}",
+        app.qemu_img
+    );
+}
+
+#[test]
+fn test_creating_a_disk_does_not_block_the_caller() {
+    // create_disk_image ran on the frame thread; a 64 GB image froze the
+    // interface until qemu-img was done.
+    if faro_qem::qemu::find_qemu_img(None).is_none() {
+        eprintln!("skipped: no qemu-img");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let target = dir.path().join("big.qcow2");
+
+    let started = std::time::Instant::now();
+    app.start_disk_creation(target.clone(), DriveFormat::Qcow2, 64);
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(250),
+        "the call must return at once, took {:?}",
+        started.elapsed()
+    );
+
+    for _ in 0..200 {
+        app.poll_disk_creation();
+        if target.is_file() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(target.is_file(), "and the image is there afterwards");
+}
+
+#[test]
+fn test_a_finished_disk_is_attached_to_the_machine_that_asked() {
+    if faro_qem::qemu::find_qemu_img(None).is_none() {
+        eprintln!("skipped: no qemu-img");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = app.vms[0].id;
+    app.selected_vm_id = Some(id);
+    let before = app.vms[0].drives.len();
+    let target = dir.path().join("attached.qcow2");
+
+    app.start_disk_creation(target.clone(), DriveFormat::Qcow2, 1);
+    for _ in 0..200 {
+        app.poll_disk_creation();
+        if app.vms[0].drives.len() > before {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert_eq!(
+        app.vms[0].drives.len(),
+        before + 1,
+        "an image nobody attaches is an image the user has to add by hand"
+    );
+    assert_eq!(
+        app.vms[0].drives.last().map(|d| d.path.clone()),
+        Some(target)
+    );
+}
+
+// --------------------------------------------------------------------------
 // Part 4, task 6: pick the survivors up again, by handshake not by PID
 // --------------------------------------------------------------------------
 

@@ -13,7 +13,7 @@ use crate::config::{
     claim_vm_folder, containment, default_settings_path, default_vms_path, find_vm_folders,
     is_inside, quarantine_file, recovery_for, save_settings, save_vms, try_load_settings,
     try_load_vms, AppSettings, ConfigLoadError, ConfigRecovery, Containment, CreationMode,
-    Firmware, VmConfig,
+    DriveConfig, DriveFormat, DriveInterface, Firmware, VmConfig,
 };
 use crate::download::{
     human_bytes, source_for, start_resolving, DownloadEvent, DownloadHandle, UreqHttp,
@@ -64,6 +64,18 @@ impl Attached {
     }
 }
 
+/// A disk image being made in a thread.
+///
+/// What the frame thread needs to remember while `qemu-img` works: where
+/// the answer arrives, which machine the image belongs to, and what to
+/// attach once it is there.
+pub struct DiskJob {
+    rx: mpsc::Receiver<Result<(), String>>,
+    attach_to: Option<Uuid>,
+    target: PathBuf,
+    format: DriveFormat,
+}
+
 /// FARO QEMU MANAGER central application state
 pub struct FaroQemApp {
     pub settings: AppSettings,
@@ -88,6 +100,18 @@ pub struct FaroQemApp {
     /// Where the list of running machines is kept: `running.json`, beside
     /// `vms.json` and never inside it (spec section 7.3).
     pub runstate_path: PathBuf,
+    /// `qemu-img`, resolved beside the capabilities.
+    ///
+    /// Searching for it meant a handful of `is_file` calls while drawing,
+    /// sixty times a second, for an answer that only changes when the user
+    /// picks a different directory (spec section 7.2).
+    pub qemu_img: Option<PathBuf>,
+    /// The emulator for the default architecture, resolved at the same
+    /// time. The settings dialog shows it; a machine still resolves its own
+    /// on launch, because that depends on the machine's architecture.
+    pub qemu_binary: Option<PathBuf>,
+    /// The disk image being made right now, if any.
+    pub disk_job: Option<DiskJob>,
     pub cli_previews: HashMap<Uuid, String>,
     pub confirming_delete_id: Option<Uuid>,
     pub logo_texture: Option<egui::TextureHandle>,
@@ -334,8 +358,14 @@ impl FaroQemApp {
 
         let selected_vm_id = vms.first().map(|v| v.id);
 
-        let capabilities = find_qemu_binary(settings.qemu_dir.as_deref(), settings.default_arch)
-            .map(|bin| probe_capabilities(&bin))
+        // Resolved once here, read by every frame afterwards. The emulator
+        // is searched for anyway to probe the capabilities, so the answer is
+        // kept rather than thrown away.
+        let qemu_binary = find_qemu_binary(settings.qemu_dir.as_deref(), settings.default_arch);
+        let qemu_img = find_qemu_img(settings.qemu_dir.as_deref());
+        let capabilities = qemu_binary
+            .as_deref()
+            .map(probe_capabilities)
             .unwrap_or_default();
         let uefi_firmware = find_uefi_firmware(settings.qemu_dir.as_deref());
 
@@ -366,6 +396,9 @@ impl FaroQemApp {
             status_map: HashMap::new(),
             qmp_ports: HashMap::new(),
             runstate_path,
+            qemu_img,
+            qemu_binary,
+            disk_job: None,
             cli_previews: HashMap::new(),
             confirming_delete_id: None,
             logo_texture,
@@ -403,6 +436,13 @@ impl FaroQemApp {
         .map(|bin| probe_capabilities(&bin))
         .unwrap_or_default();
         self.uefi_firmware = find_uefi_firmware(self.settings.qemu_dir.as_deref());
+        // The two resolved paths travel with the capabilities: all three
+        // answers depend on which QEMU is in use.
+        self.qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref());
+        self.qemu_binary = find_qemu_binary(
+            self.settings.qemu_dir.as_deref(),
+            self.settings.default_arch,
+        );
     }
 
     /// Point a duplicated machine at its own UEFI variable store.
@@ -1288,6 +1328,87 @@ impl FaroQemApp {
         }
     }
 
+    /// Make a disk image without freezing the window.
+    ///
+    /// `qemu-img` needs seconds to minutes for a large image, and the frame
+    /// thread cannot wait that long (spec section 7.2). The work goes to a
+    /// thread; `poll_disk_creation` picks up the answer. The finished image
+    /// is attached to the machine that was selected when this started —
+    /// which is the machine whose panel the dialog belongs to.
+    pub fn start_disk_creation(&mut self, target: PathBuf, format: DriveFormat, size_gb: u32) {
+        let Some(img) = self.qemu_img.clone() else {
+            self.create_disk_modal.status_msg =
+                Some(Err(self.i18n.t("qemu_img_missing").to_string()));
+            return;
+        };
+        if self.disk_job.is_some() {
+            // One at a time: two qemu-img runs on one path would fight.
+            self.create_disk_modal.status_msg = Some(Err(self.i18n.t("disk_creating").to_string()));
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let job_target = target.clone();
+        let worker = std::thread::Builder::new()
+            .name("faro-create-disk".to_string())
+            .spawn(move || {
+                let outcome = create_disk_image(&img, &job_target, format, size_gb);
+                let _ = tx.send(outcome);
+            });
+
+        match worker {
+            Ok(_) => {
+                self.disk_job = Some(DiskJob {
+                    rx,
+                    attach_to: self.selected_vm_id,
+                    target,
+                    format,
+                });
+            }
+            Err(e) => {
+                self.create_disk_modal.status_msg = Some(Err(e.to_string()));
+            }
+        }
+    }
+
+    /// Collect the result of a disk being made, if there is one yet.
+    ///
+    /// Called once per frame and never waits. A finished image is attached
+    /// to the machine that asked for it and the list is saved, so the
+    /// machine does not point at a file that only exists in this session.
+    pub fn poll_disk_creation(&mut self) {
+        let Some(job) = &self.disk_job else {
+            return;
+        };
+        let outcome = match job.rx.try_recv() {
+            Ok(outcome) => outcome,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("the disk image worker stopped without saying why".to_string())
+            }
+        };
+
+        let job = self.disk_job.take().expect("checked just above");
+        match outcome {
+            Ok(()) => {
+                if let Some(vm) = self.vms.iter_mut().find(|v| Some(v.id) == job.attach_to) {
+                    vm.drives.push(DriveConfig {
+                        path: job.target,
+                        format: job.format,
+                        interface: DriveInterface::VirtIO,
+                        boot_index: None,
+                    });
+                }
+                self.create_disk_modal.status_msg =
+                    Some(Ok(self.i18n.t("disk_created").to_string()));
+                self.save_vms_now();
+            }
+            Err(e) => {
+                self.create_disk_modal.status_msg = Some(Err(e));
+            }
+        }
+    }
+
     /// The machines that keep running when this window closes.
     ///
     /// Closing is not a reason to kill a guest (spec section 7.3), so the
@@ -1465,6 +1586,17 @@ impl FaroQemApp {
             VmDetailAction::Save(_id) => {
                 self.save_vms_now();
             }
+            VmDetailAction::CreateDisk {
+                id,
+                path,
+                format,
+                size_gb,
+            } => {
+                // The dialog belongs to the machine whose panel it was
+                // opened from, so that machine gets the image.
+                self.selected_vm_id = Some(id);
+                self.start_disk_creation(path, format, size_gb);
+            }
             VmDetailAction::Download(id) => {
                 if let Some(key) = self
                     .vms
@@ -1532,6 +1664,8 @@ impl FaroQemApp {
         // Emptied without waiting: a frame that blocks on a mirror is the
         // frozen interface spec section 6 forbids.
         self.process_download_events();
+        // Same for a disk image being made: asked after, never waited on.
+        self.poll_disk_creation();
 
         let mut menu_sidebar_action: Option<SidebarAction> = None;
         let mut menu_detail_action: Option<VmDetailAction> = None;
@@ -1810,7 +1944,7 @@ impl FaroQemApp {
                         .get(&id)
                         .and_then(|s| s.shutting_down_since());
                     let cli_cmd = self.cli_previews.get(&id).map(|s| s.as_str());
-                    let qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref());
+                    let qemu_img = self.qemu_img.clone();
                     let findings = self.findings_for(&self.vms[pos]);
 
                     let console_buf = self.console_logs.entry(id).or_default();
@@ -1858,8 +1992,12 @@ impl FaroQemApp {
 
         // 5. Modal Settings Dialog
         if self.settings_open {
+            // Cloned out of the field first: the dialog borrows the settings
+            // mutably, and the resolved path lives beside them.
+            let detected = self.qemu_binary.clone();
             let mut dialog =
-                SettingsDialog::new(&mut self.settings_open, &mut self.settings, &mut self.i18n);
+                SettingsDialog::new(&mut self.settings_open, &mut self.settings, &mut self.i18n)
+                    .with_detected_qemu(detected.as_deref());
             if dialog.show(ctx) {
                 self.refresh_capabilities();
                 self.save_settings_now();

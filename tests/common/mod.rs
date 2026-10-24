@@ -443,13 +443,26 @@ pub fn rendered_settings(
     settings: &mut faro_qem::config::AppSettings,
     i18n: &mut faro_qem::i18n::I18n,
 ) -> String {
+    rendered_settings_with_qemu(settings, i18n, None)
+}
+
+/// The settings dialog, told which emulator the application resolved.
+pub fn rendered_settings_with_qemu(
+    settings: &mut faro_qem::config::AppSettings,
+    i18n: &mut faro_qem::i18n::I18n,
+    detected: Option<&Path>,
+) -> String {
     let ctx = egui::Context::default();
     let mut open = true;
     let _ = ctx.run(Default::default(), |ctx| {
-        faro_qem::ui::SettingsDialog::new(&mut open, settings, i18n).show(ctx);
+        faro_qem::ui::SettingsDialog::new(&mut open, settings, i18n)
+            .with_detected_qemu(detected)
+            .show(ctx);
     });
     let output = ctx.run(Default::default(), |ctx| {
-        faro_qem::ui::SettingsDialog::new(&mut open, settings, i18n).show(ctx);
+        faro_qem::ui::SettingsDialog::new(&mut open, settings, i18n)
+            .with_detected_qemu(detected)
+            .show(ctx);
     });
     rendered_text(&output)
 }

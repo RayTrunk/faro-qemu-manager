@@ -2,11 +2,10 @@
 // Settings dialog component
 
 use egui::Context;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::{default_vm_dir, AppSettings, Arch, CreationMode};
 use crate::i18n::I18n;
-use crate::qemu::find_qemu_binary;
 use crate::ui::theme::{apply_theme, icons, COLOR_RUNNING, COLOR_WARNING};
 
 /// Modal dialog for application settings
@@ -14,6 +13,11 @@ pub struct SettingsDialog<'a> {
     pub open: &'a mut bool,
     pub settings: &'a mut AppSettings,
     pub i18n: &'a mut I18n,
+    /// The emulator the application resolved, or `None` when it found
+    /// none. Handed in rather than searched for here: this dialog draws
+    /// every frame it is open, and the file system does not change between
+    /// two frames (spec section 7.2).
+    pub detected_qemu: Option<&'a Path>,
 }
 
 impl<'a> SettingsDialog<'a> {
@@ -23,7 +27,14 @@ impl<'a> SettingsDialog<'a> {
             open,
             settings,
             i18n,
+            detected_qemu: None,
         }
+    }
+
+    /// Tell the dialog which emulator the application found.
+    pub fn with_detected_qemu(mut self, detected: Option<&'a Path>) -> Self {
+        self.detected_qemu = detected;
+        self
     }
 
     /// Renders the settings dialog window.
@@ -266,13 +277,11 @@ impl<'a> SettingsDialog<'a> {
 
             ui.add_space(6.0);
 
-            // Status indicator: check if find_qemu_binary finds a binary
-            let detected = find_qemu_binary(
-                self.settings.qemu_dir.as_deref(),
-                self.settings.default_arch,
-            );
-            ui.horizontal(|ui| match detected {
-                Some(ref bin_path) => {
+            // Status indicator: what the application resolved, not a fresh
+            // search. A directory the user just picked is reflected because
+            // the application re-resolves on that change.
+            ui.horizontal(|ui| match self.detected_qemu {
+                Some(bin_path) => {
                     ui.label(egui::RichText::new(icons::CHECK).color(COLOR_RUNNING));
                     ui.label(
                         egui::RichText::new(

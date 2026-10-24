@@ -176,6 +176,7 @@
   "format_raw": "Raw image",
   "disk_path_empty": "The target path is empty.",
   "disk_created": "Disk created.",
+  "disk_creating": "Creating the disk image...",
   "cli_preview_title": "QEMU command line",
   "qemu_img_missing": "qemu-img was not found. Set the QEMU directory in the settings.",
   "console_placeholder_running": "{name} is running. Output is being streamed in the background.",

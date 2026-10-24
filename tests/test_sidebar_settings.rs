@@ -485,3 +485,33 @@ fn test_a_folder_worked_out_for_another_machine_is_not_offered() {
         drawn
     );
 }
+
+// ---------------------------------------------------------------------------
+// Part 4, task 7: the dialog shows what the application resolved
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_the_settings_dialog_names_the_emulator_it_was_handed() {
+    // The dialog used to search the file system on every frame it was open.
+    // It now shows what the application resolved -- and has to actually
+    // show it, or the user cannot tell whether QEMU was found.
+    let mut settings = AppSettings::default();
+    let mut i18n = I18n::new("en");
+    let path = std::path::PathBuf::from("C:/somewhere/qemu-system-x86_64.exe");
+
+    let drawn = common::rendered_settings_with_qemu(&mut settings, &mut i18n, Some(&path));
+    assert!(
+        drawn.contains("qemu-system-x86_64"),
+        "the resolved emulator has to appear, drew:
+{}",
+        drawn
+    );
+
+    let drawn = common::rendered_settings_with_qemu(&mut settings, &mut i18n, None);
+    assert!(
+        drawn.contains(i18n.t("qemu_not_found")),
+        "and its absence has to be said, drew:
+{}",
+        drawn
+    );
+}

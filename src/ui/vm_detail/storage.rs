@@ -5,8 +5,9 @@
 
 use std::path::PathBuf;
 
+use super::VmDetailAction;
 use crate::config::{DriveConfig, DriveFormat, DriveInterface};
-use crate::qemu::{create_disk_image, find_qemu_img};
+
 use crate::ui::theme::{
     card_frame, danger_button, icons, section_header, COLOR_ERROR, COLOR_PRIMARY, COLOR_RUNNING,
 };
@@ -272,11 +273,12 @@ impl<'a> VmDetailView<'a> {
     }
 
     /// Modal Dialog: Create New Disk Image
-    pub(super) fn show_create_disk_modal(&mut self, ctx: &egui::Context) {
+    pub(super) fn show_create_disk_modal(&mut self, ctx: &egui::Context) -> Option<VmDetailAction> {
         if !self.disk_modal.open {
-            return;
+            return None;
         }
 
+        let mut action: Option<VmDetailAction> = None;
         let mut close_modal = false;
         let mut is_open = self.disk_modal.open;
 
@@ -392,42 +394,23 @@ impl<'a> VmDetailView<'a> {
                         if trimmed.is_empty() {
                             self.disk_modal.status_msg =
                                 Some(Err(self.i18n.t("disk_path_empty").to_string()));
+                        } else if self.qemu_img_binary.is_none() {
+                            self.disk_modal.status_msg =
+                                Some(Err(self.i18n.t("qemu_img_missing").to_string()));
                         } else {
-                            let path = PathBuf::from(trimmed);
-                            let qemu_img = self
-                                .qemu_img_binary
-                                .map(PathBuf::from)
-                                .or_else(|| find_qemu_img(None));
-
-                            match qemu_img {
-                                Some(bin) => {
-                                    match create_disk_image(
-                                        &bin,
-                                        &path,
-                                        self.disk_modal.format,
-                                        self.disk_modal.size_gb,
-                                    ) {
-                                        Ok(()) => {
-                                            self.vm.drives.push(DriveConfig {
-                                                path,
-                                                format: self.disk_modal.format,
-                                                interface: DriveInterface::VirtIO,
-                                                boot_index: None,
-                                            });
-                                            self.disk_modal.status_msg =
-                                                Some(Ok(self.i18n.t("disk_created").to_string()));
-                                            close_modal = true;
-                                        }
-                                        Err(e) => {
-                                            self.disk_modal.status_msg = Some(Err(e));
-                                        }
-                                    }
-                                }
-                                None => {
-                                    self.disk_modal.status_msg =
-                                        Some(Err(self.i18n.t("qemu_img_missing").to_string()));
-                                }
-                            }
+                            // Reported, not done here: qemu-img takes
+                            // seconds to minutes on a large image, and this
+                            // is the thread that draws the window (spec
+                            // section 7.2). The application starts the work
+                            // and attaches the image when it is there.
+                            action = Some(VmDetailAction::CreateDisk {
+                                id: self.vm.id,
+                                path: PathBuf::from(trimmed),
+                                format: self.disk_modal.format,
+                                size_gb: self.disk_modal.size_gb,
+                            });
+                            self.disk_modal.status_msg =
+                                Some(Ok(self.i18n.t("disk_creating").to_string()));
                         }
                     }
 
@@ -437,8 +420,9 @@ impl<'a> VmDetailView<'a> {
                 });
             });
 
-        if !is_open || close_modal {
+        if !is_open || close_modal || action.is_some() {
             self.disk_modal.open = false;
         }
+        action
     }
 }

@@ -44,6 +44,15 @@ pub enum VmDetailAction {
     /// graceful path exists at all.
     ForceStop(Uuid),
     Save(Uuid),
+    /// Make a disk image for this machine. The work belongs to the
+    /// application, not to the frame: qemu-img takes seconds to minutes on
+    /// a large image, and the panel would be frozen for all of them.
+    CreateDisk {
+        id: Uuid,
+        path: std::path::PathBuf,
+        format: DriveFormat,
+        size_gb: u32,
+    },
     /// Fetch this machine's installation image, or pick up where an
     /// interrupted transfer left off. Without this, one broken connection
     /// left a machine with a `.part` nothing could resume and a start the
@@ -63,6 +72,7 @@ impl VmDetailAction {
             | VmDetailAction::Save(id)
             | VmDetailAction::Download(id)
             | VmDetailAction::CancelDownload(id) => *id,
+            VmDetailAction::CreateDisk { id, .. } => *id,
         }
     }
 }
@@ -663,7 +673,9 @@ impl<'a> VmDetailView<'a> {
             });
 
         // 4. Modal Dialog: Create New Disk Image
-        self.show_create_disk_modal(ui.ctx());
+        if let Some(a) = self.show_create_disk_modal(ui.ctx()) {
+            action = Some(a);
+        }
 
         action
     }

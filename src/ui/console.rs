@@ -94,13 +94,21 @@ pub struct LogEntry {
     pub text: String,
     pub level: LogLevel,
     pub timestamp: String,
+    /// `text`, lower-cased once when the line arrives.
+    ///
+    /// The filter used to lower-case every line of the buffer on every
+    /// frame — thousands of allocations sixty times a second, to answer a
+    /// question whose answer cannot change until a new line arrives.
+    lower: String,
 }
 
 impl LogEntry {
     /// Create a new log entry with the current system timestamp
     pub fn new(level: LogLevel, text: impl Into<String>) -> Self {
+        let text = strip_ansi_codes(&text.into());
         Self {
-            text: strip_ansi_codes(&text.into()),
+            lower: text.to_lowercase(),
+            text,
             level,
             timestamp: current_timestamp(),
         }
@@ -112,8 +120,10 @@ impl LogEntry {
         text: impl Into<String>,
         timestamp: impl Into<String>,
     ) -> Self {
+        let text = strip_ansi_codes(&text.into());
         Self {
-            text: strip_ansi_codes(&text.into()),
+            lower: text.to_lowercase(),
+            text,
             level,
             timestamp: timestamp.into(),
         }
@@ -248,6 +258,34 @@ impl ConsoleLogBuffer {
     /// Clears all stored log entries
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    /// The lines a scrolled view actually shows.
+    ///
+    /// `egui` can tell the caller which rows are on screen; laying out the
+    /// other few thousand is work nobody sees. An out-of-range request --
+    /// what a scroll position does to a buffer that has since been trimmed
+    /// -- yields what is there, never a panic.
+    pub fn visible_slice(&self, first: usize, count: usize) -> &[LogEntry] {
+        let start = first.min(self.entries.len());
+        let end = start.saturating_add(count).min(self.entries.len());
+        &self.entries[start..end]
+    }
+
+    /// The lines containing `needle`, compared without regard to case.
+    ///
+    /// Matched against the lower-cased copy each line carries, so a filter
+    /// costs one `to_lowercase` of the needle rather than one per line per
+    /// frame. An empty needle hides nothing.
+    pub fn matching(&self, needle: &str) -> Vec<&LogEntry> {
+        if needle.is_empty() {
+            return self.entries.iter().collect();
+        }
+        let needle = needle.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|e| e.lower.contains(&needle))
+            .collect()
     }
 
     /// Returns the number of log lines in the buffer
@@ -425,16 +463,7 @@ impl<'a> ConsoleView<'a> {
                 let count_str = if self.logs.filter.is_empty() {
                     format!("{} {}", self.logs.len(), lines_suffix)
                 } else {
-                    let matching = self
-                        .logs
-                        .entries
-                        .iter()
-                        .filter(|e| {
-                            e.text
-                                .to_lowercase()
-                                .contains(&self.logs.filter.to_lowercase())
-                        })
-                        .count();
+                    let matching = self.logs.matching(&self.logs.filter).len();
                     format!("{}/{} {}", matching, self.logs.len(), lines_suffix)
                 };
                 ui.label(egui::RichText::new(count_str).size(12.0).weak());
@@ -510,8 +539,28 @@ impl<'a> ConsoleView<'a> {
                 scroll = scroll.stick_to_bottom(true);
             }
 
-            scroll.show(ui, |ui| {
+            // Which lines the filter admits, worked out once per frame
+            // rather than once per line per frame.
+            // Cloned, not taken: the text belongs to the user's field, and
+            // one short string per frame is nothing beside what the filter
+            // used to cost.
+            let filter = self.logs.filter.clone();
+            let admitted = self.logs.matching(&filter).len();
+            let row_height = ui.text_style_height(&egui::TextStyle::Monospace).max(14.0)
+                + 2.0
+                + ui.spacing().item_spacing.y;
+
+            scroll.show_rows(ui, row_height, admitted, |ui, range| {
                 ui.set_width(ui.available_width());
+                // Only the rows egui says are on screen: a five-thousand
+                // line console used to lay out all five thousand of them.
+                let rows: Vec<&LogEntry> = self
+                    .logs
+                    .matching(&filter)
+                    .into_iter()
+                    .skip(range.start)
+                    .take(range.len())
+                    .collect();
 
                 if self.logs.is_empty() {
                     ui.add_space(30.0);
@@ -541,14 +590,7 @@ impl<'a> ConsoleView<'a> {
                     });
                     ui.add_space(30.0);
                 } else {
-                    let filter_lower = self.logs.filter.to_lowercase();
-                    let filter_active = !filter_lower.is_empty();
-
-                    for entry in &self.logs.entries {
-                        if filter_active && !entry.text.to_lowercase().contains(&filter_lower) {
-                            continue;
-                        }
-
+                    for entry in rows {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
 
