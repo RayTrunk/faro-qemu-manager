@@ -2265,6 +2265,24 @@ impl FaroQemApp {
                         ui.add_space(8.0);
                         ui.label(self.i18n.t("app_tagline"));
                         ui.label(self.i18n.t("app_subtitle"));
+                        ui.add_space(8.0);
+                        // Which build, and under what terms. The GPL asks
+                        // that a program under it say so where the person
+                        // running it will look, and this window is that
+                        // place. The number comes from the package, so it
+                        // cannot drift from Cargo.toml.
+                        ui.label(
+                            egui::RichText::new(
+                                self.i18n
+                                    .tf("version", &[("version", env!("CARGO_PKG_VERSION"))]),
+                            )
+                            .size(12.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(self.i18n.t("license_notice"))
+                                .size(11.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
                         ui.add_space(12.0);
                         if ui.button(self.i18n.t("close")).clicked() {
                             self.about_open = false;

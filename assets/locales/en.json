@@ -66,6 +66,7 @@
   "qemu_dir": "QEMU Binary Directory",
   "close": "Close",
   "version": "Version {version}",
+  "license_notice": "Free software under the GNU GPL v3 — with no warranty.",
   "add_cdrom": "Add CD/DVD ISO",
   "action": "Action",
   "delete_confirm_msg": "Are you sure you want to delete",

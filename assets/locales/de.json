@@ -66,6 +66,7 @@
   "qemu_dir": "QEMU-Programmverzeichnis",
   "close": "Schließen",
   "version": "Version {version}",
+  "license_notice": "Freie Software unter der GNU GPL v3 — ohne jede Gewährleistung.",
   "add_cdrom": "CD/DVD ISO hinzufügen",
   "action": "Aktion",
   "delete_confirm_msg": "Möchten Sie wirklich löschen",

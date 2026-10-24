@@ -66,6 +66,7 @@
   "qemu_dir": "Répertoire binaire QEMU",
   "close": "Fermer",
   "version": "Version {version}",
+  "license_notice": "Logiciel libre sous licence GNU GPL v3 — sans aucune garantie.",
   "add_cdrom": "Ajouter un ISO CD/DVD",
   "action": "Action",
   "delete_confirm_msg": "Êtes-vous sûr de vouloir supprimer",
