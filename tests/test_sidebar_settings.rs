@@ -515,3 +515,51 @@ fn test_the_settings_dialog_names_the_emulator_it_was_handed() {
         drawn
     );
 }
+
+#[test]
+fn test_the_settings_window_does_not_grow_with_a_long_path_in_it() {
+    // Reported from the running application: the window grows by itself
+    // until it is too large. The existing growth test runs with no QEMU
+    // found and no directories set, which is the one state where the
+    // content is narrow enough to hide the feedback loop.
+    let ctx = Context::default();
+    let mut i18n = I18n::new("de");
+    let mut settings = AppSettings {
+        qemu_dir: Some(PathBuf::from(r"C:\Program Files\qemu")),
+        vm_dir: Some(PathBuf::from(
+            r"C:\Users\someone\Documents\FARO-VMs\a-rather-long-folder-name",
+        )),
+        ..Default::default()
+    };
+    let detected = PathBuf::from(r"C:\Program Files\qemu\qemu-system-x86_64.exe");
+    let mut open = true;
+    let mut edited = false;
+
+    let mut widths = Vec::new();
+    for _frame in 0..10 {
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1120.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let _ = ctx.run(raw_input, |ctx| {
+            SettingsDialog::new(&mut open, &mut settings, &mut i18n)
+                .with_detected_qemu(Some(&detected))
+                .editing_qemu_dir(&mut edited)
+                .show(ctx);
+        });
+        widths.push(ctx.used_rect().width());
+    }
+
+    let settled = widths[1];
+    let last = *widths.last().unwrap();
+    assert!(
+        (last - settled).abs() < 5.0,
+        "the window grew from {} to {} over ten frames: {:?}",
+        settled,
+        last,
+        widths
+    );
+}
