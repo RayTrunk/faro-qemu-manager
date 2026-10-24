@@ -8,7 +8,11 @@ use faro_qem::ui::theme::load_app_icon;
 fn main() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1120.0, 720.0])
-        .with_min_inner_size([880.0, 600.0])
+        // Measured headlessly: below about 900 points the content of the
+        // window no longer fits and is laid out past the right edge, where
+        // egui does not paint it at all. The old floor of 880 was inside
+        // that range.
+        .with_min_inner_size([960.0, 640.0])
         .with_title("FARO QEMU MANAGER (C) R.Trunk 2026");
 
     if let Some(icon) = load_app_icon() {

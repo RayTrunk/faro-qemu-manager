@@ -2195,3 +2195,73 @@ fn test_force_stop_is_the_second_step_and_it_works() {
     assert!(matches!(app.status_map.get(&id), Some(VmStatus::Stopped)));
     assert!(!app.is_attached(id));
 }
+
+// --------------------------------------------------------------------------
+// Nothing may be laid out past the right edge of the window
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_every_control_is_reachable_at_the_default_window_size() {
+    // egui does not paint what lies outside the window, so a control laid
+    // out past the edge cannot be clicked and leaves no trace at all --
+    // which is why this asks for the labels rather than for an area. The
+    // German labels are the longest of the three, and the window may be
+    // made as small as the floor in main.rs.
+    let dir = tempdir().unwrap();
+    // With a context, so the application installs its own fonts: the
+    // default ones are narrower, and a header that fits in them can still
+    // overflow in the fonts the user actually sees.
+    let font_ctx = Context::default();
+    let mut app = FaroQemApp::with_paths(
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+        Some(&font_ctx),
+    );
+    let id = app.vms[0].id;
+    app.selected_vm_id = Some(id);
+
+    // The smallest window the application allows, and the one it opens
+    // with. Below the floor the content is laid out past the right edge,
+    // where egui paints nothing at all -- which is why the floor exists.
+    for width in [960.0_f32, 1120.0, 1400.0] {
+        for lang in ["en", "de", "fr"] {
+            app.i18n.set_locale(lang);
+            let ctx = font_ctx.clone();
+            let input = || egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 745.0),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run(input(), |ctx| app.render_ui(ctx));
+            let out = ctx.run(input(), |ctx| app.render_ui(ctx));
+            let drawn = common::rendered_text(&out);
+
+            for key in [
+                "launch",
+                "shutdown",
+                "save",
+                "tab_system",
+                "tab_storage",
+                "tab_display",
+                "tab_network",
+                "tab_console",
+                "settings",
+            ] {
+                let label = app.i18n.t(key);
+                assert!(
+                    drawn.contains(label),
+                    "at {} points in {}: '{}' ({}) is nowhere on screen.
+drew:
+{}",
+                    width,
+                    lang,
+                    label,
+                    key,
+                    drawn
+                );
+            }
+        }
+    }
+}

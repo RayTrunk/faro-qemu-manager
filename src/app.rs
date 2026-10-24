@@ -2008,7 +2008,11 @@ impl FaroQemApp {
                 });
 
                 // Right Upper Corner: Only location for Settings (Gear Symbol + "Settings")
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Wrapped for the same reason as the panel's action row: a
+                // right-aligned button that does not fit used to be placed
+                // outside the window, where it cannot be clicked.
+                let corner = egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true);
+                ui.with_layout(corner, |ui| {
                     if ui
                         .button(format!("{} {}", icons::SETTINGS, self.i18n.t("settings")))
                         .clicked()
