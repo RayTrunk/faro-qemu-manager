@@ -86,6 +86,35 @@ pub fn qemu_accepts(arch: Arch, args: &[String]) -> Acceptance {
     }
 }
 
+/// Start a paused QEMU with the given extra arguments, for probing a live
+/// server.
+///
+/// `-S` keeps the guest stopped so no guest code runs, `-display none` keeps a
+/// window from appearing, and 128 MB is enough for a machine that will never
+/// boot anything. The caller owns the child and must kill it.
+pub fn spawn_paused_qemu(binary: &Path, extra: &[String]) -> std::process::Child {
+    let mut cmd = Command::new(binary);
+    cmd.args(["-machine", "q35", "-m", "128M", "-S", "-display", "none"]);
+    cmd.args(extra);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let child = cmd.spawn().expect("QEMU starts");
+    // The QMP server is listening before the monitor greets a client, but not
+    // instantly. This keeps the first attempt from landing before the socket
+    // exists; the caller's timeout covers the rest.
+    std::thread::sleep(Duration::from_millis(300));
+    child
+}
+
 /// First line QEMU wrote to stderr, for use in a failure message.
 fn read_first_stderr_line(child: &mut std::process::Child) -> String {
     use std::io::Read;
