@@ -919,12 +919,21 @@ fn kill_pid(pid: u32) -> Result<(), String> {
         let mut cmd = Command::new("taskkill");
         cmd.args(["/F", "/PID", &pid.to_string()]);
         cmd.creation_flags(CREATE_NO_WINDOW);
+        // taskkill reports on the terminal this application was started
+        // from, where it reads as output of ours. The machine's console is
+        // where a stop is reported; this is noise.
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::null());
         let _ = cmd.status();
         Ok(())
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        let _ = Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
         Ok(())
     }
 }
@@ -966,15 +975,91 @@ impl VmProcess {
     }
 }
 
+/// How large a machine's log may grow before it starts over.
+///
+/// Eight megabytes is tens of thousands of lines — more than anyone reads,
+/// and far less than a disk. A log without a cap is damage, not a feature
+/// (Review Focus 5): a machine left running for weeks would fill the
+/// volume its own disk image lives on.
+pub const LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// A machine's log file, shared by both reader threads.
+///
+/// Written line by line, unbuffered: this file exists to be read after the
+/// application is gone, and lines held in a buffer that dies with the
+/// process are exactly the lines someone would be looking for. QEMU's
+/// output is a handful of lines per start, so the cost is nothing.
+struct VmLog {
+    file: std::sync::Mutex<std::fs::File>,
+    /// Whether the one complaint about an unwritable log has been made.
+    complained: AtomicBool,
+}
+
+impl VmLog {
+    fn write_line(&self, line: &str, tx: &Sender<QemuEvent>) {
+        let Ok(mut file) = self.file.lock() else {
+            return;
+        };
+        use std::io::Write;
+        let wrote = file
+            .write_all(line.as_bytes())
+            .and_then(|_| file.write_all(b"\n"));
+        if let Err(e) = wrote {
+            // Once, not once per line: a full disk would otherwise turn the
+            // console into a wall of the same complaint.
+            if !self.complained.swap(true, Ordering::SeqCst) {
+                let _ = tx.send(QemuEvent::Error(format!("Log write error: {}", e)));
+            }
+        }
+    }
+}
+
+/// The name a full log is kept under, once.
+fn previous_log_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".1");
+    PathBuf::from(name)
+}
+
+/// Open a machine's log for appending, starting over if it is full.
+///
+/// One predecessor is kept, under `<name>.1`, and the one before that is
+/// dropped: the point of the cap is a bounded amount of disk, which a
+/// growing numbered collection would not be.
+fn open_log(path: &Path) -> Result<std::fs::File, String> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+        }
+    }
+
+    if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) >= LOG_MAX_BYTES {
+        let previous = previous_log_path(path);
+        // Windows refuses to rename onto an existing file.
+        let _ = std::fs::remove_file(&previous);
+        std::fs::rename(path, &previous).map_err(|e| format!("{}: {}", previous.display(), e))?;
+    }
+
+    std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(|e| format!("{}: {}", path.display(), e))
+}
+
 /// Spawn a QEMU process in the background with real-time stdout and stderr log streaming.
 ///
 /// Sends `QemuEvent::Started(pid)` immediately after spawning, streams `Stdout` and `Stderr`
 /// lines asynchronously via dedicated background reader threads, and monitors termination
 /// via a supervisor thread that emits `QemuEvent::Exited(exit_code)`.
+///
+/// `log` is the machine's own log file, written beside the channel so a
+/// guest that outlives this process still has a console to come back to.
 pub fn spawn_qemu(
     binary: &Path,
     args: &[String],
     event_tx: Sender<QemuEvent>,
+    log: Option<&Path>,
 ) -> Result<VmProcess, String> {
     let mut cmd = Command::new(binary);
     cmd.args(args);
@@ -1001,10 +1086,29 @@ pub fn spawn_qemu(
     let pid = child.id();
     let _ = event_tx.send(QemuEvent::Started(pid));
 
+    // The log is opened before anything is read, so the file exists from the
+    // start and a full one is rotated once here rather than on first output.
+    // A log that cannot be opened is said once and then let go: the guest
+    // matters more than its record.
+    let vm_log = match log {
+        Some(path) => match open_log(path) {
+            Ok(file) => Some(Arc::new(VmLog {
+                file: std::sync::Mutex::new(file),
+                complained: AtomicBool::new(false),
+            })),
+            Err(e) => {
+                let _ = event_tx.send(QemuEvent::Error(format!("Log unavailable: {}", e)));
+                None
+            }
+        },
+        None => None,
+    };
+
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
     let tx_stdout = event_tx.clone();
+    let log_stdout = vm_log.clone();
     let stdout_handle = if let Some(pipe) = stdout {
         let handle = std::thread::Builder::new()
             .name("qemu-stdout".to_string())
@@ -1013,6 +1117,11 @@ pub fn spawn_qemu(
                 for line in reader.lines() {
                     match line {
                         Ok(l) => {
+                            // The file first: the channel's other end goes
+                            // away when the window closes, the file does not.
+                            if let Some(log) = &log_stdout {
+                                log.write_line(&l, &tx_stdout);
+                            }
                             if tx_stdout.send(QemuEvent::Stdout(l)).is_err() {
                                 break;
                             }
@@ -1035,6 +1144,7 @@ pub fn spawn_qemu(
     };
 
     let tx_stderr = event_tx.clone();
+    let log_stderr = vm_log.clone();
     let stderr_handle = if let Some(pipe) = stderr {
         let handle = std::thread::Builder::new()
             .name("qemu-stderr".to_string())
@@ -1043,6 +1153,9 @@ pub fn spawn_qemu(
                 for line in reader.lines() {
                     match line {
                         Ok(l) => {
+                            if let Some(log) = &log_stderr {
+                                log.write_line(&l, &tx_stderr);
+                            }
                             if tx_stderr.send(QemuEvent::Stderr(l)).is_err() {
                                 break;
                             }
@@ -1088,6 +1201,17 @@ pub fn spawn_qemu(
             }
 
             sup_alive.store(false, Ordering::SeqCst);
+            // The ending goes into the file as well. A machine reattached
+            // after the application was closed shows its console from this
+            // file, and a console that stops mid-sentence tells the user
+            // nothing about how the guest ended.
+            if let Some(log) = &vm_log {
+                let ending = match exit_code {
+                    Some(code) => format!("[PROCESS] QEMU exited with code {}", code),
+                    None => "[PROCESS] QEMU exited".to_string(),
+                };
+                log.write_line(&ending, &sup_tx);
+            }
             let _ = sup_tx.send(QemuEvent::Exited(exit_code));
         })
         .map_err(|e| format!("Failed to spawn supervisor thread: {}", e))?;

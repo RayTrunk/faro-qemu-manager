@@ -143,7 +143,7 @@ fn test_faro_qem_app_process_qemu_events_lifecycle() {
     // To construct a VmProcess for mock testing, run a fast system command (rustc --version)
     let rustc_bin = std::path::PathBuf::from("rustc");
     let (dummy_tx, _dummy_rx) = mpsc::channel();
-    let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx)
+    let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx, None)
         .expect("Failed to spawn rustc for process test fixture");
 
     app.running_processes.insert(vm_id, (vm_proc, rx));
@@ -199,7 +199,7 @@ fn test_faro_qem_app_process_qemu_events_error_exit() {
     let (tx, rx) = mpsc::channel();
     let rustc_bin = std::path::PathBuf::from("rustc");
     let (dummy_tx, _dummy_rx) = mpsc::channel();
-    let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx).unwrap();
+    let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx, None).unwrap();
 
     app.running_processes.insert(vm_id, (vm_proc, rx));
 
@@ -263,7 +263,7 @@ fn test_faro_qem_app_stop_vm_cleans_up_process() {
     let (_tx, rx) = mpsc::channel();
     let rustc_bin = std::path::PathBuf::from("rustc");
     let (dummy_tx, _dummy_rx) = mpsc::channel();
-    let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx).unwrap();
+    let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx, None).unwrap();
 
     app.running_processes.insert(vm_id, (vm_proc, rx));
     app.status_map
@@ -1448,6 +1448,74 @@ fn test_a_vm_without_a_qmp_port_is_not_quietly_killed() {
     let err = outcome.expect_err("without QMP there is no graceful path");
     assert!(!err.is_empty(), "the reason has to reach the user");
     assert!(attached, "the guest must still be running");
+}
+
+// --------------------------------------------------------------------------
+// Part 4, task 5: a log file per machine, and no lost ending
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_the_last_output_and_the_exit_are_not_lost_when_a_vm_stops() {
+    // force_stop_vm dropped the receiving end along with the process, and
+    // with it QEMU's last words and its exit event.
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = common::push_startable_vm(&mut app, &root);
+    app.launch_vm(id, None).unwrap();
+    app.force_stop_vm(id).unwrap();
+    for _ in 0..40 {
+        app.process_qemu_events(None);
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let said = app
+        .console_logs
+        .get(&id)
+        .map(|b| b.all_text())
+        .unwrap_or_default();
+    assert!(
+        said.contains("[PROCESS]"),
+        "the console must keep the ending, got:\n{}",
+        said
+    );
+    assert!(
+        said.to_lowercase().contains("exit"),
+        "QEMU's exit is part of that ending, got:\n{}",
+        said
+    );
+}
+
+#[test]
+fn test_a_started_machine_gets_a_log_file_of_its_own() {
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = common::push_startable_vm(&mut app, &root);
+    let log = app.log_path_for(id);
+    app.launch_vm(id, None).unwrap();
+    let exists = log.is_file();
+    let recorded = faro_qem::runstate::load(&app.runstate_path)
+        .first()
+        .map(|r| r.log.clone());
+    let _ = app.force_stop_vm(id);
+    assert!(
+        exists,
+        "there is no console to come back to without {:?}",
+        log
+    );
+    assert_eq!(
+        recorded,
+        Some(log),
+        "the record has to name the file the output actually went to"
+    );
 }
 
 // --------------------------------------------------------------------------

@@ -1088,7 +1088,11 @@ impl FaroQemApp {
         self.cli_previews.insert(id, cli_str);
 
         let (tx, rx) = mpsc::channel();
-        match spawn_qemu(&bin_path, &args, tx) {
+        // Everything the machine says also goes into its own file, so a
+        // guest that outlived the application still has a console to come
+        // back to (spec section 7.3, point 4).
+        let log_path = self.log_path_for(id);
+        match spawn_qemu(&bin_path, &args, tx, Some(&log_path)) {
             Ok(proc) => {
                 let pid = proc.pid();
                 self.running_processes.insert(id, (proc, rx));
@@ -1258,10 +1262,28 @@ impl FaroQemApp {
     pub fn force_stop_vm(&mut self, id: Uuid) -> Result<(), String> {
         self.qmp_ports.remove(&id);
         self.forget_running(id);
-        if let Some((mut proc, _)) = self.running_processes.remove(&id) {
+        if let Some((mut proc, rx)) = self.running_processes.remove(&id) {
             let res = proc.kill();
+            // Read what is still in the channel before it is dropped. Taking
+            // the receiver away with the process threw out QEMU's last words
+            // and its exit event, which is exactly what a user looks for
+            // after a stop that surprised them.
+            let deadline = Instant::now() + LAST_WORDS_BUDGET;
             let log_buf = self.console_logs.entry(id).or_default();
             log_buf.push_system("[PROCESS] QEMU process terminated");
+            while Instant::now() < deadline {
+                match rx.recv_timeout(Duration::from_millis(25)) {
+                    Ok(event) => {
+                        let ended = matches!(event, QemuEvent::Exited(_));
+                        log_buf.handle_event(&event);
+                        if ended {
+                            break;
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
             self.status_map.insert(id, VmStatus::Stopped);
             res
         } else {
@@ -1813,6 +1835,14 @@ impl FaroQemApp {
 /// rather than hanging, which is why retrying -- not a single long timeout
 /// -- is what bounds this.
 const QMP_CONNECT_BUDGET: Duration = Duration::from_secs(2);
+
+/// How long a stop waits for the process's last lines and its exit.
+///
+/// The reader threads are still draining the pipes when `kill` returns, and
+/// the receiving end is about to be dropped. Half a second is enough for a
+/// process that has just been killed and short enough not to be felt as a
+/// freeze; what does not arrive in time is in the machine's log file.
+const LAST_WORDS_BUDGET: Duration = Duration::from_millis(500);
 
 /// Reach a machine's monitor, giving a just-started QEMU time to be there.
 fn connect_qmp(port: u16) -> Result<(QmpClient<TcpStream>, Greeting), String> {
