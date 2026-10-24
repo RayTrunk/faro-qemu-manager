@@ -11,6 +11,7 @@
   "shutdown_elapsed": "wartet seit {seconds} s",
   "shutdown_unavailable": "Kein QMP-Zugang zu dieser Maschine: sie lässt sich nur hart beenden.",
   "status_shutting_down": "Fährt herunter",
+  "vms_keep_running": "Läuft nach dem Schließen weiter: {names}",
   "save": "Profil speichern",
   "delete": "Löschen",
   "duplicate": "Duplizieren",

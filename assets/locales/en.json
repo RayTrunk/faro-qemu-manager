@@ -11,6 +11,7 @@
   "shutdown_elapsed": "waiting {seconds} s",
   "shutdown_unavailable": "No QMP channel to this machine: it can only be stopped the hard way.",
   "status_shutting_down": "Shutting down",
+  "vms_keep_running": "Keeps running after you close: {names}",
   "save": "Save Profile",
   "delete": "Delete",
   "duplicate": "Duplicate",

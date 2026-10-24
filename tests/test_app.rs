@@ -10,8 +10,9 @@ use tempfile::tempdir;
 
 use faro_qem::app::FaroQemApp;
 use faro_qem::config::{
-    claim_vm_folder, load_settings, load_vms, save_settings, vm_folder_name, Accelerator,
-    AppSettings, Arch, CreationMode, DriveConfig, DriveFormat, DriveInterface, Firmware, VmConfig,
+    claim_vm_folder, load_settings, load_vms, save_settings, try_load_vms, vm_folder_name,
+    Accelerator, AppSettings, Arch, CreationMode, DriveConfig, DriveFormat, DriveInterface,
+    Firmware, VmConfig,
 };
 use faro_qem::qemu::{nvram_path_for, spawn_qemu, QemuEvent};
 use faro_qem::templates::VmTemplate;
@@ -1447,6 +1448,116 @@ fn test_a_vm_without_a_qmp_port_is_not_quietly_killed() {
     let err = outcome.expect_err("without QMP there is no graceful path");
     assert!(!err.is_empty(), "the reason has to reach the user");
     assert!(attached, "the guest must still be running");
+}
+
+// --------------------------------------------------------------------------
+// Part 4, task 4: closing the window is not a reason to kill a guest
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_dropping_the_app_leaves_the_guest_running() {
+    // Spec section 7.3, the user's own decision. Drop used to kill every VM.
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let pid = {
+        let mut app = common::app_with_vm_dir(&root);
+        let id = common::push_startable_vm(&mut app, &root);
+        app.launch_vm(id, None).unwrap();
+        let pid = match app.status_map.get(&id) {
+            Some(VmStatus::Running { pid }) => *pid,
+            other => panic!("got {:?}", other),
+        };
+        drop(app);
+        pid
+    };
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    let alive = common::pid_is_alive(pid);
+    let _ = common::kill_pid(pid);
+    assert!(
+        alive,
+        "the app closing is not a reason to kill a guest (pid {})",
+        pid
+    );
+}
+
+#[test]
+fn test_dropping_the_app_still_saves_the_configuration() {
+    let dir = tempdir().unwrap();
+    let vms_path = dir.path().join("vms.json");
+    {
+        let mut app =
+            FaroQemApp::with_paths(dir.path().join("settings.json"), vms_path.clone(), None);
+        app.vms.push(VmConfig::new_default("kept", Arch::X86_64));
+    }
+    assert!(try_load_vms(&vms_path)
+        .unwrap()
+        .iter()
+        .any(|v| v.name == "kept"));
+}
+
+#[test]
+fn test_the_record_outlives_the_app() {
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let runstate = {
+        let mut app = common::app_with_vm_dir(&root);
+        let id = common::push_startable_vm(&mut app, &root);
+        app.launch_vm(id, None).unwrap();
+        let path = app.runstate_path.clone();
+        drop(app);
+        path
+    };
+    let records = faro_qem::runstate::load(&runstate);
+    let killed: Vec<u32> = records.iter().map(|r| r.pid).collect();
+    for pid in &killed {
+        let _ = common::kill_pid(*pid);
+    }
+    assert_eq!(
+        records.len(),
+        1,
+        "without this the VM cannot be found again"
+    );
+}
+
+#[test]
+fn test_closing_with_running_vms_names_them() {
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let mut app = common::app_with_vm_dir(&root);
+    let id = common::push_startable_vm(&mut app, &root);
+    app.launch_vm(id, None).unwrap();
+    let names = app.surviving_vm_names();
+    let _ = app.force_stop_vm(id);
+    assert_eq!(
+        names.len(),
+        1,
+        "say which guests keep running -- without asking, got: {:?}",
+        names
+    );
+    assert_eq!(names[0], "startable");
+}
+
+#[test]
+fn test_a_stopped_machine_is_not_named_as_surviving() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("vms");
+    let app = common::app_with_vm_dir(&root);
+    assert!(
+        app.surviving_vm_names().is_empty(),
+        "nothing is running, so nothing survives the window"
+    );
 }
 
 #[test]

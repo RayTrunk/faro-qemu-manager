@@ -32,7 +32,7 @@ use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
 use crate::ui::settings::SettingsDialog;
 use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
-use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
+use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY, COLOR_RUNNING};
 use crate::ui::vm_detail::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
 use crate::ui::wizard::{WizardAction, WizardDialog, WizardState, PENDING_ISO};
 
@@ -1166,6 +1166,22 @@ impl FaroQemApp {
         let _ = runstate::remove(&self.runstate_path, id);
     }
 
+    /// The machines that keep running when this window closes.
+    ///
+    /// Closing is not a reason to kill a guest (spec section 7.3), so the
+    /// user is told which ones carry on -- stated, not asked: carrying on
+    /// is the wanted behaviour, and a dialog that interrupts a shutdown of
+    /// the host to ask about it would be in the way.
+    pub fn surviving_vm_names(&self) -> Vec<String> {
+        self.running_processes
+            .keys()
+            .map(|id| match self.vms.iter().find(|v| v.id == *id) {
+                Some(vm) => vm.name.clone(),
+                None => id.to_string(),
+            })
+            .collect()
+    }
+
     /// Forget this machine's monitor port.
     ///
     /// What a machine started by an older version of the application looks
@@ -1387,6 +1403,10 @@ impl FaroQemApp {
             self.notices = notices;
         }
 
+        // Worked out before the menu is drawn: the closure below holds the
+        // application mutably, and this reads it.
+        let surviving = self.surviving_vm_names();
+
         // 3. Top Menu Bar (Global application commands & Settings)
         egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -1434,6 +1454,18 @@ impl FaroQemApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    // Said before the click, not after: a notice shown while
+                    // the window is going away is a notice nobody reads.
+                    if !surviving.is_empty() {
+                        ui.label(
+                            egui::RichText::new(
+                                self.i18n
+                                    .tf("vms_keep_running", &[("names", &surviving.join(", "))]),
+                            )
+                            .size(11.0)
+                            .color(COLOR_RUNNING),
+                        );
+                    }
                     if ui
                         .button(format!("{} {}", icons::CLOSE, self.i18n.t("exit")))
                         .clicked()
@@ -1800,8 +1832,20 @@ fn connect_qmp(port: u16) -> Result<(QmpClient<TcpStream>, Greeting), String> {
 
 impl Drop for FaroQemApp {
     fn drop(&mut self) {
-        for (_id, (mut proc, _)) in self.running_processes.drain() {
-            let _ = proc.kill();
+        // The guests stay up. Closing the window used to kill every one of
+        // them, which is the opposite of what spec section 7.3 asks for:
+        // a long installation must survive the manager being closed. The
+        // handles are let go of without a `kill`, the run state file keeps
+        // the port and the number, and the next start reattaches.
+        self.running_processes.clear();
+        // The downloads are a different matter: their worker threads die
+        // with this process anyway, and a half-written `.part` is resumable
+        // by design. Asking them to stop is tidier than being torn down
+        // mid-write.
+        for handle in self.downloads.values() {
+            handle
+                .cancel
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         // Results are discarded deliberately: the window is going away, so
         // there is no interface left that could show a notice about a failed

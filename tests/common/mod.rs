@@ -314,6 +314,53 @@ pub fn app_with_vm_dir(vm_dir: &Path) -> faro_qem::app::FaroQemApp {
     app
 }
 
+/// Whether a process with this number is still there.
+///
+/// Asked of the operating system, not of the application: the question
+/// under test is whether a guest outlived the app, and the app's own
+/// bookkeeping cannot answer that.
+pub fn pid_is_alive(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let out = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+            .output();
+        match out {
+            // Without a match tasklist prints "INFO: No tasks are running
+            // which match the specified criteria.", which holds no number.
+            Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+/// Kill a process by number, so no guest outlives the test run.
+pub fn kill_pid(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = Command::new("taskkill");
+        c.args(["/F", "/T", "/PID", &pid.to_string()]);
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut c = Command::new("kill");
+        c.args(["-9", &pid.to_string()]);
+        c
+    };
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
 /// Whether this machine has a QEMU for the usual architecture.
 ///
 /// Tests that start a real guest skip without one rather than fail: the

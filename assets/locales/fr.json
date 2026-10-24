@@ -11,6 +11,7 @@
   "shutdown_elapsed": "en attente depuis {seconds} s",
   "shutdown_unavailable": "Aucun canal QMP vers cette machine : elle ne peut être arrêtée que de force.",
   "status_shutting_down": "Arrêt en cours",
+  "vms_keep_running": "Continue après la fermeture : {names}",
   "save": "Sauvegarder",
   "delete": "Supprimer",
   "duplicate": "Dupliquer",
