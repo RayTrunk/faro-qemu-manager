@@ -314,6 +314,44 @@ pub fn app_with_vm_dir(vm_dir: &Path) -> faro_qem::app::FaroQemApp {
     app
 }
 
+/// Some long-lived process that is not one of our machines.
+///
+/// Stands in for the stranger a recycled process number points at. The
+/// caller owns it and must kill it.
+pub fn spawn_long_sleep() -> std::process::Child {
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = Command::new("powershell.exe");
+        c.args(["-Command", "Start-Sleep -Seconds 60"]);
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut c = Command::new("sleep");
+        c.arg("60");
+        c
+    };
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    cmd.spawn().expect("a long-lived process starts")
+}
+
+/// An app on given paths, whose VM folders go into `vm_dir`.
+///
+/// For the reattach tests, which need a second app on the **same** files:
+/// `app_with_vm_dir` derives the paths from the directory, this takes them.
+pub fn app_with_paths_and_vm_dir(
+    settings: &Path,
+    vms: &Path,
+    vm_dir: &Path,
+) -> faro_qem::app::FaroQemApp {
+    let mut app =
+        faro_qem::app::FaroQemApp::with_paths(settings.to_path_buf(), vms.to_path_buf(), None);
+    app.settings.vm_dir = Some(vm_dir.to_path_buf());
+    app
+}
+
 /// Whether a process with this number is still there.
 ///
 /// Asked of the operating system, not of the application: the question
@@ -394,6 +432,9 @@ pub fn push_startable_vm(app: &mut faro_qem::app::FaroQemApp, dir: &Path) -> uui
 
     let id = vm.id;
     app.vms.push(vm);
+    // Written to disk the way the interface writes it, so a second app on the
+    // same files knows this machine -- which the reattach tests depend on.
+    app.handle_vm_detail_action(faro_qem::ui::vm_detail::VmDetailAction::Save(id), None);
     id
 }
 

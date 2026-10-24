@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use faro_qem::config::Arch;
 use faro_qem::qemu::find_qemu_binary;
-use faro_qem::qmp::{connect_tcp, free_local_port, qmp_args, QmpClient};
+use faro_qem::qmp::{connect_tcp, free_local_port, qmp_args, uuid_args, QmpClient};
 
 /// A transport that replays canned lines and records what was written.
 ///
@@ -149,6 +149,34 @@ fn test_the_qmp_arguments_are_the_form_qemu_accepts() {
             "-qmp".to_string(),
             "tcp:127.0.0.1:12345,server=on,wait=off".to_string()
         ]
+    );
+}
+
+#[test]
+fn test_a_real_qemu_reports_back_the_uuid_it_was_given() {
+    // The port alone is not identity: the operating system hands loopback
+    // ports out again, so a handshake can land on a different QEMU of ours
+    // that happens to hold the recorded port. A machine started with its own
+    // id as the machine UUID can be asked who it is. Review Focus 1.
+    let Some(bin) = find_qemu_binary(None, Arch::X86_64) else {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    };
+    let port = free_local_port().unwrap();
+    let id = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+    let mut args = qmp_args(port);
+    args.extend(uuid_args(id));
+    let mut child = common::spawn_paused_qemu(&bin, &args);
+
+    let (mut client, _) = connect_tcp(port, Duration::from_secs(5)).expect("the monitor answers");
+    let reported = client.machine_uuid();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(
+        reported.as_deref(),
+        Ok(id),
+        "QEMU has to report the identity it was started with"
     );
 }
 

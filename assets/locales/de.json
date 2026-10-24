@@ -12,6 +12,8 @@
   "shutdown_unavailable": "Kein QMP-Zugang zu dieser Maschine: sie lässt sich nur hart beenden.",
   "status_shutting_down": "Fährt herunter",
   "vms_keep_running": "Läuft nach dem Schließen weiter: {names}",
+  "console_from_log": "--- aus der Protokolldatei {path} ---",
+  "console_log_unreadable": "Die Protokolldatei dieser Maschine ließ sich nicht lesen: {error}",
   "save": "Profil speichern",
   "delete": "Löschen",
   "duplicate": "Duplizieren",

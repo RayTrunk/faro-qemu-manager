@@ -10,11 +10,12 @@ use tempfile::tempdir;
 
 use faro_qem::app::FaroQemApp;
 use faro_qem::config::{
-    claim_vm_folder, load_settings, load_vms, save_settings, try_load_vms, vm_folder_name,
-    Accelerator, AppSettings, Arch, CreationMode, DriveConfig, DriveFormat, DriveInterface,
-    Firmware, VmConfig,
+    claim_vm_folder, load_settings, load_vms, save_settings, save_vms, try_load_vms,
+    vm_folder_name, Accelerator, AppSettings, Arch, CreationMode, DriveConfig, DriveFormat,
+    DriveInterface, Firmware, VmConfig,
 };
 use faro_qem::qemu::{nvram_path_for, spawn_qemu, QemuEvent};
+use faro_qem::runstate::{load, put, RunRecord};
 use faro_qem::templates::VmTemplate;
 use faro_qem::ui::console::LogLevel;
 use faro_qem::ui::sidebar::{SidebarAction, VmStatus};
@@ -146,7 +147,8 @@ fn test_faro_qem_app_process_qemu_events_lifecycle() {
     let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx, None)
         .expect("Failed to spawn rustc for process test fixture");
 
-    app.running_processes.insert(vm_id, (vm_proc, rx));
+    app.running_processes
+        .insert(vm_id, faro_qem::app::Attached::Owned { proc: vm_proc, rx });
 
     // 1. Started event
     tx.send(QemuEvent::Started(4242)).unwrap();
@@ -201,7 +203,8 @@ fn test_faro_qem_app_process_qemu_events_error_exit() {
     let (dummy_tx, _dummy_rx) = mpsc::channel();
     let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx, None).unwrap();
 
-    app.running_processes.insert(vm_id, (vm_proc, rx));
+    app.running_processes
+        .insert(vm_id, faro_qem::app::Attached::Owned { proc: vm_proc, rx });
 
     // Send error followed by non-zero exit code
     tx.send(QemuEvent::Error(
@@ -265,7 +268,8 @@ fn test_faro_qem_app_stop_vm_cleans_up_process() {
     let (dummy_tx, _dummy_rx) = mpsc::channel();
     let vm_proc = spawn_qemu(&rustc_bin, &["--version".to_string()], dummy_tx, None).unwrap();
 
-    app.running_processes.insert(vm_id, (vm_proc, rx));
+    app.running_processes
+        .insert(vm_id, faro_qem::app::Attached::Owned { proc: vm_proc, rx });
     app.status_map
         .insert(vm_id, VmStatus::Running { pid: 7777 });
 
@@ -1448,6 +1452,227 @@ fn test_a_vm_without_a_qmp_port_is_not_quietly_killed() {
     let err = outcome.expect_err("without QMP there is no graceful path");
     assert!(!err.is_empty(), "the reason has to reach the user");
     assert!(attached, "the guest must still be running");
+}
+
+// --------------------------------------------------------------------------
+// Part 4, task 6: pick the survivors up again, by handshake not by PID
+// --------------------------------------------------------------------------
+
+/// A record pointing wherever the test wants it to point.
+fn record_for(vm_id: uuid::Uuid, pid: u32, port: u16, log: PathBuf) -> RunRecord {
+    RunRecord {
+        vm_id,
+        pid,
+        qmp_port: port,
+        started_at: 0,
+        log,
+    }
+}
+
+#[test]
+fn test_a_vm_that_outlived_the_app_is_picked_up_again() {
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let (settings, vms) = (
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+    );
+    let (id, pid) = {
+        let mut app = common::app_with_paths_and_vm_dir(&settings, &vms, dir.path());
+        let id = common::push_startable_vm(&mut app, dir.path());
+        app.launch_vm(id, None).unwrap();
+        let pid = app.status_map.get(&id).and_then(|s| s.pid()).unwrap();
+        drop(app);
+        (id, pid)
+    };
+
+    let mut app = FaroQemApp::with_paths(settings, vms, None);
+    let status = app.status_map.get(&id).cloned();
+    let outcome = app.shutdown_vm(id);
+    // Killed before the assertions: a guest left behind by a failing test
+    // outlives the test run, and this one is meant to outlive its app.
+    let _ = app.force_stop_vm(id);
+    let _ = common::kill_pid(pid);
+    assert!(
+        matches!(status, Some(VmStatus::Running { .. })),
+        "got: {:?}",
+        status
+    );
+    outcome.expect("a reattached VM takes a shutdown request");
+}
+
+#[test]
+fn test_a_reattached_vm_has_a_console_again() {
+    // Spec section 7.3, point 4: the pipes belonged to the parent that died.
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let (settings, vms) = (
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+    );
+    let (id, pid) = {
+        let mut app = common::app_with_paths_and_vm_dir(&settings, &vms, dir.path());
+        let id = common::push_startable_vm(&mut app, dir.path());
+        app.launch_vm(id, None).unwrap();
+        let pid = app.status_map.get(&id).and_then(|s| s.pid()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        drop(app);
+        (id, pid)
+    };
+
+    let mut app = FaroQemApp::with_paths(settings, vms, None);
+    let said = app
+        .console_logs
+        .get(&id)
+        .map(|b| b.all_text())
+        .unwrap_or_default();
+    let _ = app.force_stop_vm(id);
+    let _ = common::kill_pid(pid);
+    assert!(
+        !said.trim().is_empty(),
+        "a reattached VM with an empty console is half the truth"
+    );
+}
+
+#[test]
+fn test_a_recycled_pid_is_never_adopted() {
+    // Review Focus 1 and spec section 7.3: process numbers are reused. This
+    // record points at a live process that is not our VM and answers no QMP.
+    let dir = tempdir().unwrap();
+    let (settings, vms) = (
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+    );
+    let mut stranger = common::spawn_long_sleep();
+    let vm = VmConfig::new_default("ghost", Arch::X86_64);
+    let id = vm.id;
+    save_vms(&vms, &[vm]).unwrap();
+    let runstate = dir.path().join("running.json");
+    put(
+        &runstate,
+        record_for(
+            id,
+            stranger.id(),
+            faro_qem::qmp::free_local_port().unwrap(), // nothing listens there
+            dir.path().join("ghost.log"),
+        ),
+    )
+    .unwrap();
+
+    let app = FaroQemApp::with_paths(settings, vms, None);
+    let status = app.status_map.get(&id).cloned();
+    let left_alone = common::pid_is_alive(stranger.id());
+    let left_over = load(&runstate);
+    let _ = common::kill_pid(stranger.id());
+    let _ = stranger.wait();
+
+    assert!(
+        !matches!(status, Some(VmStatus::Running { .. })),
+        "a live PID is not proof: got {:?}",
+        status
+    );
+    assert!(
+        left_over.is_empty(),
+        "an unconfirmable record is cleaned up, got: {:?}",
+        left_over
+    );
+    assert!(left_alone, "and the stranger is left alone");
+}
+
+#[test]
+fn test_another_machines_qemu_on_the_recorded_port_is_not_adopted() {
+    // The collision a handshake alone cannot see: loopback ports are handed
+    // out again, so the QEMU answering on the recorded port may be a
+    // different machine of ours. Adopting it would mean shutting down the
+    // wrong guest on the next click.
+    if common::qemu_missing() {
+        eprintln!("skipped: no qemu-system-x86_64");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let (settings, vms) = (
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+    );
+    let mut app = common::app_with_paths_and_vm_dir(&settings, &vms, dir.path());
+    let running = common::push_startable_vm(&mut app, dir.path());
+    let impostor = VmConfig::new_default("impostor", Arch::X86_64);
+    let impostor_id = impostor.id;
+    app.vms.push(impostor);
+    app.launch_vm(running, None).unwrap();
+    let port = *app.qmp_ports.get(&running).unwrap();
+    let pid = app.status_map.get(&running).and_then(|s| s.pid()).unwrap();
+    drop(app);
+
+    // The impostor claims the live machine's process and monitor.
+    let runstate = dir.path().join("running.json");
+    put(
+        &runstate,
+        record_for(impostor_id, pid, port, dir.path().join("impostor.log")),
+    )
+    .unwrap();
+
+    let mut app = FaroQemApp::with_paths(settings, vms, None);
+    let impostor_status = app.status_map.get(&impostor_id).cloned();
+    let still_there = common::pid_is_alive(pid);
+    let left_over = load(&runstate);
+    let _ = app.force_stop_vm(running);
+    let _ = common::kill_pid(pid);
+
+    assert!(
+        !matches!(impostor_status, Some(VmStatus::Running { .. })),
+        "the wrong machine was adopted: got {:?}",
+        impostor_status
+    );
+    assert!(
+        !left_over.iter().any(|r| r.vm_id == impostor_id),
+        "and its record is cleaned up"
+    );
+    assert!(still_there, "the real machine is left running");
+}
+
+#[test]
+fn test_a_record_whose_process_is_gone_is_cleaned_up() {
+    let dir = tempdir().unwrap();
+    let (settings, vms) = (
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+    );
+    let vm = VmConfig::new_default("gone", Arch::X86_64);
+    let id = vm.id;
+    save_vms(&vms, &[vm]).unwrap();
+    let runstate = dir.path().join("running.json");
+    put(&runstate, record_for(id, 1, 1, dir.path().join("x.log"))).unwrap();
+
+    let app = FaroQemApp::with_paths(settings, vms, None);
+    assert!(!matches!(
+        app.status_map.get(&id),
+        Some(VmStatus::Running { .. })
+    ));
+    assert!(load(&runstate).is_empty());
+}
+
+#[test]
+fn test_a_record_for_a_vm_that_no_longer_exists_is_dropped() {
+    let dir = tempdir().unwrap();
+    let runstate = dir.path().join("running.json");
+    put(
+        &runstate,
+        record_for(uuid::Uuid::new_v4(), 1, 1, PathBuf::from("x")),
+    )
+    .unwrap();
+    let _ = FaroQemApp::with_paths(
+        dir.path().join("settings.json"),
+        dir.path().join("vms.json"),
+        None,
+    );
+    assert!(load(&runstate).is_empty());
 }
 
 // --------------------------------------------------------------------------

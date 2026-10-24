@@ -12,6 +12,8 @@
   "shutdown_unavailable": "No QMP channel to this machine: it can only be stopped the hard way.",
   "status_shutting_down": "Shutting down",
   "vms_keep_running": "Keeps running after you close: {names}",
+  "console_from_log": "--- from the log file {path} ---",
+  "console_log_unreadable": "The log file of this machine could not be read: {error}",
   "save": "Save Profile",
   "delete": "Delete",
   "duplicate": "Duplicate",

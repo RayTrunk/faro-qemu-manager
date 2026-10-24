@@ -12,6 +12,8 @@
   "shutdown_unavailable": "Aucun canal QMP vers cette machine : elle ne peut être arrêtée que de force.",
   "status_shutting_down": "Arrêt en cours",
   "vms_keep_running": "Continue après la fermeture : {names}",
+  "console_from_log": "--- depuis le fichier journal {path} ---",
+  "console_log_unreadable": "Le fichier journal de cette machine n'a pas pu être lu : {error}",
   "save": "Sauvegarder",
   "delete": "Supprimer",
   "duplicate": "Dupliquer",

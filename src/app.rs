@@ -22,10 +22,10 @@ use crate::i18n::I18n;
 use crate::preflight::{blocks, check_vm, Finding, HostFacts};
 use crate::qemu::{
     build_qemu_args, create_disk_image, find_qemu_binary, find_qemu_img, find_uefi_firmware,
-    nvram_path_for, prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent,
-    UefiFirmware, VmProcess,
+    kill_pid, nvram_path_for, prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities,
+    QemuEvent, UefiFirmware, VmProcess,
 };
-use crate::qmp::{connect_tcp, free_local_port, qmp_args, Greeting, QmpClient};
+use crate::qmp::{connect_tcp, free_local_port, qmp_args, uuid_args, Greeting, QmpClient};
 use crate::runstate::{self, now_secs, RunRecord};
 use crate::templates::VmTemplate;
 use crate::ui::console::ConsoleLogBuffer;
@@ -35,6 +35,34 @@ use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
 use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY, COLOR_RUNNING};
 use crate::ui::vm_detail::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
 use crate::ui::wizard::{WizardAction, WizardDialog, WizardState, PENDING_ISO};
+
+/// How this application holds a running machine.
+///
+/// A machine started here comes with a process handle and a channel of its
+/// output. A machine picked up again after the application was closed has
+/// neither: the pipes belonged to the parent that ended, and the process is
+/// nobody's child any more. It is still fully operable — the monitor and
+/// the process number are what the stop paths need — so the difference
+/// lives in the type rather than in a flag somebody forgets to check.
+pub enum Attached {
+    Owned {
+        proc: VmProcess,
+        rx: mpsc::Receiver<QemuEvent>,
+    },
+    Reattached {
+        pid: u32,
+    },
+}
+
+impl Attached {
+    /// The machine's process number, however it is held.
+    pub fn pid(&self) -> u32 {
+        match self {
+            Attached::Owned { proc, .. } => proc.pid(),
+            Attached::Reattached { pid } => *pid,
+        }
+    }
+}
 
 /// FARO QEMU MANAGER central application state
 pub struct FaroQemApp {
@@ -50,7 +78,7 @@ pub struct FaroQemApp {
     pub active_tab: DetailTab,
     pub create_disk_modal: CreateDiskState,
     pub console_logs: HashMap<Uuid, ConsoleLogBuffer>,
-    pub running_processes: HashMap<Uuid, (VmProcess, mpsc::Receiver<QemuEvent>)>,
+    pub running_processes: HashMap<Uuid, Attached>,
     pub status_map: HashMap<Uuid, VmStatus>,
     /// The QMP port each running machine was started with. This is what
     /// makes a graceful shutdown possible at all; a machine missing from
@@ -321,7 +349,7 @@ impl FaroQemApp {
             apply_theme(c, &settings.theme);
         }
 
-        Self {
+        let mut app = Self {
             settings,
             settings_path,
             vms,
@@ -355,7 +383,12 @@ impl FaroQemApp {
             downloads: HashMap::new(),
             download_status: HashMap::new(),
             host: HostFacts::probe(),
-        }
+        };
+
+        // Last, with the machine list in hand: a record can only be matched
+        // to a machine that is known, and an unmatched one is cleaned up.
+        app.reattach_running_vms();
+        app
     }
 
     /// Re-ask QEMU what it can do, after the directory or architecture changed.
@@ -931,7 +964,12 @@ impl FaroQemApp {
         let mut exited_ids = Vec::new();
         let mut repaint_requested = false;
 
-        for (&id, (proc, rx)) in self.running_processes.iter_mut() {
+        for (&id, attached) in self.running_processes.iter_mut() {
+            // A reattached machine has no channel: its output goes to its
+            // log file, which the reattach read into the console once.
+            let Attached::Owned { proc, rx } = attached else {
+                continue;
+            };
             let log_buf = self.console_logs.entry(id).or_default();
             loop {
                 match rx.try_recv() {
@@ -1073,6 +1111,10 @@ impl FaroQemApp {
         match free_local_port() {
             Ok(port) => {
                 args.extend(qmp_args(port));
+                // The machine's own id as its machine UUID, so the reattach
+                // can ask *which* machine answers on a recorded port rather
+                // than only whether some QEMU does.
+                args.extend(uuid_args(&id.to_string()));
                 self.qmp_ports.insert(id, port);
             }
             Err(e) => {
@@ -1095,7 +1137,8 @@ impl FaroQemApp {
         match spawn_qemu(&bin_path, &args, tx, Some(&log_path)) {
             Ok(proc) => {
                 let pid = proc.pid();
-                self.running_processes.insert(id, (proc, rx));
+                self.running_processes
+                    .insert(id, Attached::Owned { proc, rx });
                 self.status_map.insert(id, VmStatus::Running { pid });
                 self.record_running(id, pid);
                 let log_buf = self.console_logs.entry(id).or_default();
@@ -1170,6 +1213,81 @@ impl FaroQemApp {
         let _ = runstate::remove(&self.runstate_path, id);
     }
 
+    /// Pick up the machines that outlived the last run of the application.
+    ///
+    /// The record is a lead, not proof. A process number proves nothing —
+    /// the operating system hands them out again — and a handshake on the
+    /// recorded port proves only that *a* QEMU is there, which on a reused
+    /// loopback port can be a different machine of ours. Both have to agree,
+    /// and the machine has to say its own id: only then is it adopted.
+    ///
+    /// Anything that cannot be confirmed is treated as ended and its record
+    /// dropped (spec section 7.3). Nothing is ever killed here: whatever is
+    /// on the other end of an unconfirmable record is somebody else's
+    /// program.
+    pub fn reattach_running_vms(&mut self) {
+        for record in runstate::load(&self.runstate_path) {
+            let known = self.vms.iter().any(|v| v.id == record.vm_id);
+            if !known {
+                // The machine was deleted while it was running, or the file
+                // belongs to another configuration.
+                self.forget_running(record.vm_id);
+                continue;
+            }
+
+            match confirm_identity(record.qmp_port, record.vm_id) {
+                Ok(greeting) => {
+                    self.running_processes
+                        .insert(record.vm_id, Attached::Reattached { pid: record.pid });
+                    self.qmp_ports.insert(record.vm_id, record.qmp_port);
+                    self.status_map
+                        .insert(record.vm_id, VmStatus::Running { pid: record.pid });
+                    self.read_console_from_log(record.vm_id, &record.log);
+                    let log_buf = self.console_logs.entry(record.vm_id).or_default();
+                    log_buf.push_system(format!(
+                        "[QMP] reattached to QEMU {}.{}.{} with PID {}",
+                        greeting.major, greeting.minor, greeting.micro, record.pid
+                    ));
+                }
+                Err(_) => {
+                    self.forget_running(record.vm_id);
+                }
+            }
+        }
+    }
+
+    /// Fill a reattached machine's console from its log file.
+    ///
+    /// The pipes belonged to the parent that ended, so the file is the only
+    /// account of what the guest said. The first line says where this comes
+    /// from: a console that silently mixes a file with live output would
+    /// make the user guess which is which.
+    fn read_console_from_log(&mut self, id: Uuid, log: &Path) {
+        let text = match std::fs::read_to_string(log) {
+            Ok(text) => text,
+            Err(e) => {
+                let notice = self
+                    .i18n
+                    .tf("console_log_unreadable", &[("error", &e.to_string())]);
+                self.console_logs.entry(id).or_default().push_error(notice);
+                return;
+            }
+        };
+
+        // Only the tail: the buffer is for reading, and a capped log can
+        // still hold tens of thousands of lines.
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines.len().saturating_sub(CONSOLE_FROM_LOG_LINES);
+        let log_buf = self.console_logs.entry(id).or_default();
+        log_buf.push_system(
+            self.i18n
+                .tf("console_from_log", &[("path", &log.display().to_string())]),
+        );
+        for line in &lines[start..] {
+            log_buf.push_stdout(*line);
+        }
+    }
+
     /// The machines that keep running when this window closes.
     ///
     /// Closing is not a reason to kill a guest (spec section 7.3), so the
@@ -1233,7 +1351,7 @@ impl FaroQemApp {
             .status_map
             .get(&id)
             .and_then(|s| s.pid())
-            .or_else(|| self.running_processes.get(&id).map(|(p, _)| p.pid()))
+            .or_else(|| self.running_processes.get(&id).map(|a| a.pid()))
             .unwrap_or(0);
         self.status_map.insert(
             id,
@@ -1262,8 +1380,13 @@ impl FaroQemApp {
     pub fn force_stop_vm(&mut self, id: Uuid) -> Result<(), String> {
         self.qmp_ports.remove(&id);
         self.forget_running(id);
-        if let Some((mut proc, rx)) = self.running_processes.remove(&id) {
-            let res = proc.kill();
+        if let Some(attached) = self.running_processes.remove(&id) {
+            // Both ways of holding a machine end the same way, and a
+            // reattached one has no handle to kill -- only a number.
+            let (res, rx) = match attached {
+                Attached::Owned { mut proc, rx } => (proc.kill(), Some(rx)),
+                Attached::Reattached { pid } => (kill_pid(pid), None),
+            };
             // Read what is still in the channel before it is dropped. Taking
             // the receiver away with the process threw out QEMU's last words
             // and its exit event, which is exactly what a user looks for
@@ -1271,7 +1394,7 @@ impl FaroQemApp {
             let deadline = Instant::now() + LAST_WORDS_BUDGET;
             let log_buf = self.console_logs.entry(id).or_default();
             log_buf.push_system("[PROCESS] QEMU process terminated");
-            while Instant::now() < deadline {
+            while let (Some(rx), true) = (rx.as_ref(), Instant::now() < deadline) {
                 match rx.recv_timeout(Duration::from_millis(25)) {
                     Ok(event) => {
                         let ended = matches!(event, QemuEvent::Exited(_));
@@ -1843,6 +1966,41 @@ const QMP_CONNECT_BUDGET: Duration = Duration::from_secs(2);
 /// process that has just been killed and short enough not to be felt as a
 /// freeze; what does not arrive in time is in the machine's log file.
 const LAST_WORDS_BUDGET: Duration = Duration::from_millis(500);
+
+/// How many lines of a machine's log file go into its console on reattach.
+///
+/// Enough to see how the guest got where it is, bounded so that a capped
+/// but still large log does not go into memory whole.
+const CONSOLE_FROM_LOG_LINES: usize = 500;
+
+/// How long a reattach waits for an answer on a recorded port.
+///
+/// Short on purpose: this runs at start-up, once per recorded machine, and
+/// a port nothing listens on is refused immediately. A machine that cannot
+/// answer quickly here is treated as ended, which costs nothing — it is
+/// still running, and the next start tries again.
+const REATTACH_BUDGET: Duration = Duration::from_millis(1500);
+
+/// Confirm that the machine behind a recorded port is the machine claimed.
+///
+/// Two things have to hold: a QMP handshake succeeds (so a QEMU is there at
+/// all), and the machine reports the id it was started with (so it is
+/// *this* machine and not another of ours on a port the operating system
+/// handed out again). A machine from an older version, started before the
+/// identity was stamped on, reports a different UUID and is therefore not
+/// adopted — it keeps running, and the hard stop stays available.
+fn confirm_identity(port: u16, expected: Uuid) -> Result<Greeting, String> {
+    let (mut client, greeting) = connect_tcp(port, REATTACH_BUDGET)?;
+    let reported = client.machine_uuid()?;
+    if reported.eq_ignore_ascii_case(&expected.to_string()) {
+        Ok(greeting)
+    } else {
+        Err(format!(
+            "127.0.0.1:{} answers for {}, not for {}",
+            port, reported, expected
+        ))
+    }
+}
 
 /// Reach a machine's monitor, giving a just-started QEMU time to be there.
 fn connect_qmp(port: u16) -> Result<(QmpClient<TcpStream>, Greeting), String> {

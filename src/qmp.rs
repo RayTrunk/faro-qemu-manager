@@ -75,6 +75,21 @@ impl<T: Read + Write> QmpClient<T> {
         self.execute("system_powerdown").map(|_| ())
     }
 
+    /// Who this machine says it is.
+    ///
+    /// The machine UUID, which the application sets to the machine's own id
+    /// at start. A handshake proves only that *a* QEMU holds the recorded
+    /// port; loopback ports are handed out again, so the one answering may
+    /// be a different machine of ours. This answers which.
+    pub fn machine_uuid(&mut self) -> Result<String, String> {
+        let reply = self.execute("query-uuid")?;
+        reply
+            .get("UUID")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("no UUID in the answer: {}", reply))
+    }
+
     /// Everything sent to the server so far. For tests.
     pub fn wrote(&self) -> &str {
         &self.written
@@ -226,4 +241,14 @@ pub fn qmp_args(port: u16) -> Vec<String> {
         "-qmp".to_string(),
         format!("tcp:127.0.0.1:{},server=on,wait=off", port),
     ]
+}
+
+/// The arguments that stamp a machine with its own identity.
+///
+/// `-uuid` sets what the guest sees as its SMBIOS UUID and what
+/// `query-uuid` reports back. The application passes the machine's own id,
+/// which turns the reattach from "some QEMU is on that port" into "this
+/// machine is on that port".
+pub fn uuid_args(id: &str) -> Vec<String> {
+    vec!["-uuid".to_string(), id.to_string()]
 }

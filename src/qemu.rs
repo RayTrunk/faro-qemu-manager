@@ -911,7 +911,11 @@ pub enum QemuEvent {
 }
 
 /// Terminate a process by operating system process ID
-fn kill_pid(pid: u32) -> Result<(), String> {
+/// Kill a process by number.
+///
+/// The only way to stop a machine this application did not start itself:
+/// a reattached guest is nobody's child, so there is no handle to use.
+pub fn kill_pid(pid: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
