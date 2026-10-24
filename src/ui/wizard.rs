@@ -36,6 +36,13 @@ pub enum WizardAction {
 /// Disk size for a machine started from the empty tile, which names none.
 pub const DEFAULT_DISK_GB: u32 = 32;
 
+/// Stands in for an image whose filename a mirror has not yet given us.
+///
+/// It is deliberately a path that does not exist: the start check then
+/// reports a missing ISO and holds the start, which is exactly the state the
+/// machine is in. Replaced the moment the download reports its target.
+pub const PENDING_ISO: &str = "(waiting for the download)";
+
 /// Everything the wizard remembers between frames.
 pub struct WizardState {
     pub open: bool,
@@ -53,6 +60,14 @@ pub struct WizardState {
     /// Size of the disk image to make. Not part of the configuration, which
     /// only records where the disk is.
     pub disk_gb: u32,
+    /// Whether the user asked for the ISO to be fetched. Private, because
+    /// the answer is not this flag alone -- see
+    /// [`WizardState::wants_download`]. Two sources for one question is how
+    /// a withdrawn request came to be honoured anyway.
+    download_requested: bool,
+    /// Why opening the official page did not work, if it did not. Kept here
+    /// rather than in a local so the user can read it.
+    pub page_problem: Option<String>,
 }
 
 impl Default for WizardState {
@@ -66,6 +81,8 @@ impl Default for WizardState {
             network_open: false,
             draft: None,
             disk_gb: DEFAULT_DISK_GB,
+            download_requested: false,
+            page_problem: None,
         }
     }
 }
@@ -80,6 +97,9 @@ impl WizardState {
             self.selected = Some(template.key);
             self.disk_gb = template.disk_gb;
             self.draft = Some(template.instantiate(&self.name, Path::new("")));
+            // Starting over includes the download: the new template may not
+            // even have a mirror.
+            self.download_requested = false;
         }
     }
 
@@ -116,6 +136,14 @@ impl WizardState {
         vm.name = self.name.trim().to_string();
         if !self.iso.trim().is_empty() {
             vm.cdroms = vec![PathBuf::from(self.iso.trim())];
+        } else if self.download_requested {
+            // A machine waiting for an image must not look complete. Until a
+            // mirror answers, the real filename is unknown, so this stands
+            // in: the start check sees a missing ISO and holds the start,
+            // which is the truth. Without it there is a window -- and, if
+            // the mirror is unreachable, a permanent state -- where the
+            // machine looks ready and would install nothing.
+            vm.cdroms = vec![PathBuf::from(PENDING_ISO)];
         }
         self.open = false;
         Some(vm)
@@ -124,6 +152,35 @@ impl WizardState {
     /// The machine was created. Nothing is left to come back to.
     pub fn created(&mut self) {
         self.dismiss();
+    }
+
+    /// Never mind, do not fetch it.
+    pub fn withdraw_download(&mut self) {
+        self.download_requested = false;
+    }
+
+    /// Fetch the ISO once the machine exists.
+    ///
+    /// Only remembered here. Resolving today's filename means talking to a
+    /// mirror, and that does not happen while a frame is being drawn.
+    pub fn request_download(&mut self) {
+        self.download_requested = true;
+        // The field is where the answer goes; asking for it to be fetched
+        // means it is not named yet.
+        self.iso.clear();
+    }
+
+    /// Whether the user has asked for the image to be fetched.
+    ///
+    /// Naming a file withdraws the request: someone who clicks Download and
+    /// then browses for the ISO they already have has changed their mind,
+    /// and silently fetching one anyway -- over their own choice -- is the
+    /// anti-goal from spec section 1.
+    pub fn wants_download(&mut self) -> bool {
+        if !self.iso.trim().is_empty() {
+            self.download_requested = false;
+        }
+        self.download_requested
     }
 
     /// Switch the draft between UEFI and BIOS.
@@ -178,6 +235,17 @@ impl WizardState {
         }
     }
 
+    /// Open the dialog for a fresh machine.
+    ///
+    /// A constructor rather than a struct literal, so the private request
+    /// flag stays private and callers cannot forget to clear it.
+    pub fn opened() -> Self {
+        Self {
+            open: true,
+            ..Self::default()
+        }
+    }
+
     /// Close without creating anything.
     fn dismiss(&mut self) {
         self.open = false;
@@ -185,6 +253,7 @@ impl WizardState {
         self.draft = None;
         self.name.clear();
         self.iso.clear();
+        self.download_requested = false;
     }
 
     fn template(&self) -> Option<&'static VmTemplate> {
@@ -307,7 +376,22 @@ impl<'a> WizardDialog<'a> {
         let name_label = self.i18n.t("vm_name").to_string();
         let iso_label = self.i18n.t("iso_path").to_string();
         let browse = format!("{} {}", icons::FOLDER, self.i18n.t("browse"));
+        let download = self.i18n.t("download").to_string();
+        let open_page = self.i18n.t("open_official_page").to_string();
+        let limit_notice = self.i18n.t("download_limit_notice").to_string();
+        let page_failed = self.i18n.t("open_page_failed").to_string();
+        let filter_iso = self.i18n.t("filter_iso").to_string();
+        // What the chosen template offers: a mirror we can check, or a page
+        // the user fetches from themselves.
+        let template_key = self.state.selected;
+        let has_source = template_key
+            .and_then(VmTemplate::by_key)
+            .and_then(|t| t.iso_source)
+            .and_then(crate::download::source_for)
+            .is_some();
+        let page = template_key.and_then(crate::download::official_page);
         let state = &mut *self.state;
+        let mut open_page_failed: Option<String> = None;
 
         egui::Grid::new("wizard_fields")
             .num_columns(2)
@@ -330,15 +414,61 @@ impl<'a> WizardDialog<'a> {
                     );
                     if ui.button(&browse).clicked() {
                         if let Some(file) = rfd::FileDialog::new()
-                            .add_filter(self.i18n.t("filter_iso"), &["iso", "img"])
+                            .add_filter(&filter_iso, &["iso", "img"])
                             .pick_file()
                         {
                             state.iso = file.to_string_lossy().to_string();
                         }
                     }
+                    // Only where there is a stable, documented, checkable
+                    // address. Everything else gets its page instead, which
+                    // is honest rather than a download that cannot be
+                    // verified.
+                    if has_source {
+                        // A toggle, not a one-shot: clicking it changes what
+                        // the dialog shows, so the deferral is visible rather
+                        // than inferred. The transfer begins after Create --
+                        // a button that silently does nothing until a second
+                        // button is pressed reads as broken.
+                        let asked = state.wants_download();
+                        if ui.selectable_label(asked, &download).clicked() {
+                            if asked {
+                                state.withdraw_download();
+                            } else {
+                                state.request_download();
+                            }
+                        }
+                    } else if let Some(url) = page {
+                        if ui.button(&open_page).clicked() {
+                            if let Err(e) = crate::download::open_in_browser(url) {
+                                open_page_failed = Some(page_failed.replace("{error}", &e));
+                            }
+                        }
+                    }
                 });
                 ui.end_row();
             });
+
+        // Spec section 6: the limit belongs in the interface, not only in the
+        // design document.
+        if has_source {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(&limit_notice)
+                    .size(11.0)
+                    .color(ui.visuals().weak_text_color()),
+            );
+        }
+        // Kept in the state, not in a local: a local lives for one frame,
+        // which for a 16 ms flash is the same as saying nothing. For the
+        // three images the application deliberately will not download, this
+        // button failing in silence is the whole feature failing.
+        if let Some(problem) = open_page_failed {
+            self.state.page_problem = Some(problem);
+        }
+        if let Some(problem) = &self.state.page_problem {
+            ui.label(egui::RichText::new(problem).size(11.0).color(COLOR_ERROR));
+        }
     }
 
     /// Hardware and firmware, collapsed, with its core values in the header.

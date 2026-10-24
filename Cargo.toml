@@ -14,6 +14,10 @@ uuid = { version = "1.10", features = ["v4", "serde"] }
 rfd = "0.15"
 shell-words = "1.1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Blocking HTTP with rustls: no async runtime to drag in, and the download
+# already runs in a thread of its own. Allowed by spec section 11.8.
+ureq = "3.5"
+sha2 = "0.11"
 
 [dev-dependencies]
 tempfile = "3.12"

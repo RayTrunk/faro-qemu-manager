@@ -31,13 +31,24 @@ pub enum VmDetailAction {
     Launch(Uuid),
     Stop(Uuid),
     Save(Uuid),
+    /// Fetch this machine's installation image, or pick up where an
+    /// interrupted transfer left off. Without this, one broken connection
+    /// left a machine with a `.part` nothing could resume and a start the
+    /// check would hold for ever.
+    Download(Uuid),
+    /// Stop the transfer and clear what it left behind.
+    CancelDownload(Uuid),
 }
 
 impl VmDetailAction {
     /// Return the ID of the target virtual machine
     pub fn vm_id(&self) -> Uuid {
         match self {
-            VmDetailAction::Launch(id) | VmDetailAction::Stop(id) | VmDetailAction::Save(id) => *id,
+            VmDetailAction::Launch(id)
+            | VmDetailAction::Stop(id)
+            | VmDetailAction::Save(id)
+            | VmDetailAction::Download(id)
+            | VmDetailAction::CancelDownload(id) => *id,
         }
     }
 }
@@ -144,6 +155,11 @@ pub struct VmDetailView<'a> {
     /// What the start check found for this machine. Shown above the start
     /// button, so a refused start is explained before it is attempted.
     pub findings: &'a [Finding],
+    /// One sentence about a download in flight, when there is one.
+    pub download_status: Option<&'a str>,
+    /// Whether this machine has an image worth fetching: a template with a
+    /// mirror, and no finished file yet.
+    pub can_resume_download: bool,
 }
 
 impl<'a> VmDetailView<'a> {
@@ -171,6 +187,8 @@ impl<'a> VmDetailView<'a> {
             capabilities: None,
             uefi_available: true,
             findings: &[],
+            download_status: None,
+            can_resume_download: false,
         }
     }
 
@@ -189,6 +207,18 @@ impl<'a> VmDetailView<'a> {
 
     pub fn with_capabilities(mut self, caps: &'a QemuCapabilities) -> Self {
         self.capabilities = Some(caps);
+        self
+    }
+
+    /// Tell the panel what a running download is doing.
+    pub fn with_download_status(mut self, status: Option<&'a str>) -> Self {
+        self.download_status = status;
+        self
+    }
+
+    /// Tell the panel whether fetching this machine's image is on offer.
+    pub fn with_resumable_download(mut self, resumable: bool) -> Self {
+        self.can_resume_download = resumable;
         self
     }
 
@@ -237,7 +267,32 @@ impl<'a> VmDetailView<'a> {
                 };
                 ui.label(egui::RichText::new(&finding.text).size(11.0).color(colour));
             }
-            if !self.findings.is_empty() {
+            // A download in flight says what it is doing and offers the one
+            // thing the user might want: to stop it. One that is not running
+            // but left a partial behind offers to pick it up — without that,
+            // a single broken connection left the machine unstartable with
+            // nothing in the interface to do about it.
+            if let Some(status) = self.download_status {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(status).size(11.0).color(COLOR_PRIMARY));
+                    if ui.small_button(self.i18n.t("cancel")).clicked() {
+                        action = Some(VmDetailAction::CancelDownload(self.vm.id));
+                    }
+                });
+            } else if self.can_resume_download {
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(format!("{} {}", icons::ADD, self.i18n.t("download")))
+                        .clicked()
+                    {
+                        action = Some(VmDetailAction::Download(self.vm.id));
+                    }
+                    if ui.small_button(self.i18n.t("clear")).clicked() {
+                        action = Some(VmDetailAction::CancelDownload(self.vm.id));
+                    }
+                });
+            }
+            if !self.findings.is_empty() || self.download_status.is_some() {
                 ui.add_space(4.0);
             }
 

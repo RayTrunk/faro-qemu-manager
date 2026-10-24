@@ -174,5 +174,15 @@
   "console_placeholder_stopped": "{name} is stopped. Launch it to start the emulation.",
   "copy": "Copy command",
   "duplicate_image_missing": "The image {path} is not there, so it was not copied. Both machines now point at it, and whichever one finds it first will use it alone.",
-  "duplicate_folder_failed": "No folder could be made for the copy ({error}), so {path} was not copied. Both machines now use it, and running both at once destroys it."
+  "duplicate_folder_failed": "No folder could be made for the copy ({error}), so {path} was not copied. Both machines now use it, and running both at once destroys it.",
+  "download": "Download",
+  "open_official_page": "Open the official page",
+  "download_limit_notice": "The checksum is fetched over HTTPS from the publisher's own checksum file. It proves the transfer was not corrupted — not that the image is genuine. Whoever controls the mirror controls both. Signature checking is out of scope.",
+  "download_running": "Downloading {name}: {done} of {total}",
+  "download_verifying": "Checking the checksum of {name}…",
+  "download_done": "{name} is downloaded and verified.",
+  "download_failed": "{name} could not be downloaded: {error}",
+  "pf_download_unfinished": "The download of {path} is not finished. The machine starts once the file is there and verified.",
+  "download_resolving": "Looking up the current filename for {name}…",
+  "open_page_failed": "The page could not be opened: {error}"
 }

@@ -172,6 +172,67 @@ pub fn catalogue_keys(lang: &str) -> std::collections::BTreeSet<String> {
     map.into_keys().collect()
 }
 
+/// An `Http` that serves a body slowly enough to still be running when the
+/// test looks at it.
+///
+/// Used where a download has to be in flight — deleting a machine mid
+/// transfer, for instance — rather than finished before the next line runs.
+pub struct SlowHttp {
+    body: Vec<u8>,
+}
+
+impl SlowHttp {
+    pub fn serving(body: &[u8]) -> Self {
+        Self {
+            body: body.to_vec(),
+        }
+    }
+}
+
+impl faro_qem::download::Http for SlowHttp {
+    fn get_text(&self, url: &str) -> Result<String, String> {
+        Err(format!("{}: this fake only serves a body", url))
+    }
+
+    fn head_ok(&self, _url: &str) -> bool {
+        true
+    }
+
+    fn get_from(
+        &self,
+        _url: &str,
+        offset: u64,
+    ) -> Result<(Box<dyn std::io::Read + Send>, Option<u64>), String> {
+        let from = (offset as usize).min(self.body.len());
+        Ok((
+            Box::new(Dawdler {
+                data: self.body[from..].to_vec(),
+                pos: 0,
+            }),
+            Some(self.body.len() as u64),
+        ))
+    }
+}
+
+struct Dawdler {
+    data: Vec<u8>,
+    pos: usize,
+}
+
+impl std::io::Read for Dawdler {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        std::thread::sleep(Duration::from_millis(50));
+        let left = self.data.len() - self.pos;
+        if left == 0 {
+            return Ok(0);
+        }
+        let take = buf.len().min(left).min(256);
+        buf[..take].copy_from_slice(&self.data[self.pos..self.pos + take]);
+        self.pos += take;
+        Ok(take)
+    }
+}
+
 /// Every Rust source file under `dir`, concatenated.
 ///
 /// Used to ask questions about the whole interface at once — whether a key is
