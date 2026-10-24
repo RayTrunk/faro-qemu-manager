@@ -10,8 +10,56 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
-/// How long any single request may take.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long fetching a small document may take, end to end.
+///
+/// A checksum file is tens of kilobytes. One that takes longer than this is
+/// a mirror that is not answering, and a total budget is exactly the right
+/// instrument for it.
+const TEXT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long waiting for a connection may take.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the transfer may go silent before it counts as dead.
+///
+/// This is what bounds a stalled download — not its total duration. Several
+/// minutes rather than seconds, because a mirror under load can pause.
+const STALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The timeouts a transfer runs under.
+///
+/// Public because the suite holds a line here that cost a working download
+/// once: `timeout_global` in ureq is end-to-end *including reading the
+/// response body*, so a total budget on an image transfer is a cap on how
+/// large an image can ever arrive. 30 seconds on a 10 MB/s line is 300 MB,
+/// and the Ubuntu desktop image is six gigabytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timeouts {
+    /// Total budget for the whole operation, body included.
+    pub global: Option<Duration>,
+    /// Budget for establishing the connection.
+    pub connect: Option<Duration>,
+    /// How long a single read may take — silence, not size.
+    pub per_read: Option<Duration>,
+}
+
+/// What a small document is fetched under: a total budget is right.
+pub fn text_timeouts() -> Timeouts {
+    Timeouts {
+        global: Some(TEXT_TIMEOUT),
+        connect: Some(CONNECT_TIMEOUT),
+        per_read: Some(STALL_TIMEOUT),
+    }
+}
+
+/// What an image transfer is fetched under: no total budget.
+pub fn body_timeouts() -> Timeouts {
+    Timeouts {
+        global: None,
+        connect: Some(CONNECT_TIMEOUT),
+        per_read: Some(STALL_TIMEOUT),
+    }
+}
 
 /// How much is read at a time, both from the network and from disk.
 const CHUNK: usize = 64 * 1024;
@@ -39,11 +87,36 @@ pub trait Http: Send + Sync {
 }
 
 /// The real thing.
-pub struct UreqHttp;
+///
+/// Two agents, because the two kinds of request need opposite treatment: a
+/// checksum file gets a total budget, an image must not have one. Built once
+/// and kept, so the connection pool survives — resolving an image means one
+/// GET plus a HEAD per candidate, and a fresh agent each time would mean a
+/// fresh TLS handshake each time.
+pub struct UreqHttp {
+    text: ureq::Agent,
+    body: ureq::Agent,
+}
+
+impl Default for UreqHttp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UreqHttp {
+    pub fn new() -> Self {
+        Self {
+            text: agent_for(text_timeouts(), true),
+            body: agent_for(body_timeouts(), false),
+        }
+    }
+}
 
 impl Http for UreqHttp {
     fn get_text(&self, url: &str) -> Result<String, String> {
-        let mut response = agent()
+        let mut response = self
+            .text
             .get(url)
             .call()
             .map_err(|e| format!("{}: {}", url, e))?;
@@ -54,7 +127,7 @@ impl Http for UreqHttp {
     }
 
     fn head_ok(&self, url: &str) -> bool {
-        agent().head(url).call().is_ok()
+        self.text.head(url).call().is_ok()
     }
 
     fn get_from(
@@ -62,30 +135,52 @@ impl Http for UreqHttp {
         url: &str,
         offset: u64,
     ) -> Result<(Box<dyn Read + Send>, Option<u64>), String> {
-        let mut request = agent().get(url);
+        let mut request = self.body.get(url);
         if offset > 0 {
             request = request.header("Range", &format!("bytes={}-", offset));
         }
         let response = request.call().map_err(|e| format!("{}: {}", url, e))?;
 
-        // Content-Length is the length of what is being sent, which after a
-        // range request is the remainder. The total is that plus the offset.
+        // A mirror that ignores the Range header answers 200 with the whole
+        // body. Appending that to a partial file would duplicate the prefix,
+        // so the caller has to know: 206 means the offset was honoured.
+        let ranged = response.status().as_u16() == 206;
+
+        // Content-Length is the length of what is being sent, which after an
+        // honoured range request is the remainder. The total is that plus the
+        // offset; when the range was ignored it is the whole thing already.
+        let base = if ranged { offset } else { 0 };
         let total = response
             .headers()
             .get("content-length")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok())
-            .map(|len| len + offset);
+            .map(|len| len + base);
+
+        if offset > 0 && !ranged {
+            return Err(format!(
+                "{}: the mirror ignored the range request (status {}); starting over",
+                url,
+                response.status().as_u16()
+            ));
+        }
 
         Ok((Box::new(response.into_body().into_reader()), total))
     }
 }
 
-fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(REQUEST_TIMEOUT))
-        .build()
-        .into()
+fn agent_for(timeouts: Timeouts, compress: bool) -> ureq::Agent {
+    let mut config = ureq::Agent::config_builder()
+        .timeout_global(timeouts.global)
+        .timeout_connect(timeouts.connect)
+        .timeout_per_read(timeouts.per_read);
+    if !compress {
+        // An image is already compressed, and a mirror that content-encoded
+        // it would make a range request incoherent: a byte offset into a
+        // gzip stream cannot be resumed.
+        config = config.accept_encoding(ureq::config::AutoHeaderValue::None);
+    }
+    config.build().into()
 }
 
 /// How a publisher writes its checksum file.
@@ -157,7 +252,9 @@ static SOURCES: &[IsoSource] = &[
         style: ChecksumStyle::TwoSpace,
         name_prefix: "archlinux-",
         name_suffix: "-x86_64.iso",
-        exclude: &["bootstrap"],
+        // Nothing to exclude: the suffix already rejects the bootstrap
+        // tarball, which is the only other thing in that directory.
+        exclude: &[],
     },
     IsoSource {
         key: "alpine",
@@ -274,11 +371,21 @@ pub fn resolve(source: &IsoSource, http: &dyn Http) -> Result<Resolved, String> 
         let sha256 = match source.style {
             ChecksumStyle::PerFile => {
                 let per_file = format!("{}{}.sha256", source.dir_url, name);
-                let text = http.get_text(&per_file)?;
-                let first = checksum_lines(&text, ChecksumStyle::TwoSpace)
-                    .next()
+                // A candidate whose digest file does not answer is a
+                // candidate to skip, not the end of the search -- trying the
+                // next one is what this loop is for.
+                let Ok(text) = http.get_text(&per_file) else {
+                    continue;
+                };
+                // The line must be about this file. A digest file that names
+                // something else is not this image's digest.
+                let found = checksum_lines(&text, ChecksumStyle::TwoSpace)
+                    .find(|(_, listed)| *listed == name.as_str() || text.lines().count() == 1)
                     .map(|(hash, _)| hash.to_string());
-                first.ok_or_else(|| format!("{}: no digest in {}", source.key, per_file))?
+                match found {
+                    Some(hash) => hash,
+                    None => continue,
+                }
             }
             style => checksum_lines(&listing, style)
                 .find(|(_, candidate)| *candidate == name.as_str())
@@ -545,20 +652,59 @@ fn fetch_and_verify(
     tx: &Sender<DownloadEvent>,
 ) -> Result<(), Problem> {
     // Resume from whatever is already there. A `.part` is only ever written
-    // by this function, so its length is a byte count we can trust.
+    // by this function, so its length is a byte count we can trust — but not
+    // a byte count that necessarily belongs to *this* image. Arch re-stocks
+    // `archlinux-x86_64.iso` under the same name every month, so last
+    // month's partial sits exactly where this month's resume would start.
     let mut done = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
 
-    let (mut stream, total) = http
-        .get_from(&resolved.url, done)
-        .map_err(Problem::resumable)?;
+    let (mut stream, total) = match http.get_from(&resolved.url, done) {
+        Ok(answer) => answer,
+        // A resume that the mirror refuses — 416 because the partial is
+        // longer than the file now is, or a mirror that ignores ranges
+        // altogether — must not be a dead end. Nothing can be salvaged from
+        // those bytes, so they go and the transfer starts over. Without
+        // this, a stale partial makes the machine unstartable for ever.
+        Err(problem) if done > 0 => {
+            let _ = std::fs::remove_file(part);
+            done = 0;
+            http.get_from(&resolved.url, 0)
+                .map_err(|e| Problem::resumable(format!("{} (after {})", e, problem)))?
+        }
+        Err(problem) => return Err(Problem::resumable(problem)),
+    };
 
+    // The same check from the other side: a partial longer than the file
+    // cannot be a prefix of it, whatever the mirror said.
+    if let Some(total) = total {
+        if done > total {
+            let _ = std::fs::remove_file(part);
+            done = 0;
+            let (fresh, _) = http
+                .get_from(&resolved.url, 0)
+                .map_err(Problem::resumable)?;
+            stream = fresh;
+        }
+    }
+
+    let had_partial = done > 0;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(part)
-        // Nothing could be written at all — an unwritable directory, a path
-        // whose parent is a file. There is no partial to keep.
-        .map_err(|e| Problem::fatal(format!("{}: {}", part.display(), e)))?;
+        .map_err(|e| {
+            let message = format!("{}: {}", part.display(), e);
+            // A file that exists and merely cannot be opened — locked by a
+            // scanner, marked read-only — holds bytes whose contents are
+            // not in question. Discarding gigabytes for a reason unrelated
+            // to them would be wrong. With nothing there, there is nothing
+            // to keep.
+            if had_partial {
+                Problem::resumable(message)
+            } else {
+                Problem::fatal(message)
+            }
+        })?;
 
     let mut buffer = vec![0u8; CHUNK];
     let mut last_report = Instant::now();

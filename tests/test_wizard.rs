@@ -31,10 +31,7 @@ fn render_wizard(state: &mut WizardState) -> String {
 }
 
 fn opened() -> WizardState {
-    WizardState {
-        open: true,
-        ..Default::default()
-    }
+    WizardState::opened()
 }
 
 #[test]
@@ -170,11 +167,8 @@ fn test_the_reason_create_is_blocked_is_shown_next_to_the_button() {
 
 #[test]
 fn test_the_empty_tile_promises_nothing() {
-    let mut state = WizardState {
-        open: true,
-        name: "Blank".to_string(),
-        ..Default::default()
-    };
+    let mut state = WizardState::opened();
+    state.name = "Blank".to_string();
     state.select_empty(Arch::X86_64);
     let draft = state.draft.as_ref().unwrap();
     assert_eq!(draft.template, None);
@@ -404,18 +398,15 @@ fn test_asking_for_a_download_is_remembered_until_the_machine_is_made() {
     let mut state = opened();
     state.select("debian");
     state.name = "Debian".to_string();
-    assert!(!state.download_requested, "nobody asked yet");
+    assert!(!state.wants_download(), "nobody asked yet");
     state.request_download();
-    assert!(state.download_requested);
+    assert!(state.wants_download());
 
     // The request survives handing out the draft, because the caller starts
     // the download only after the machine exists.
     let _ = state.take_draft().expect("there is a draft");
-    assert!(state.download_requested);
+    assert!(state.wants_download());
 
     state.created();
-    assert!(
-        !state.download_requested,
-        "and is cleared for the next time"
-    );
+    assert!(!state.wants_download(), "and is cleared for the next time");
 }

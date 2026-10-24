@@ -1259,3 +1259,91 @@ fn test_a_download_for_a_template_without_a_source_starts_nothing() {
     );
     assert!(app.downloads.is_empty());
 }
+
+// --------------------------------------------------------------------------
+// From the whole-branch review of part 3b
+// --------------------------------------------------------------------------
+
+#[test]
+fn test_a_machine_awaiting_a_download_never_looks_ready_to_start() {
+    // I6: between creation and the moment a mirror answers, the machine had
+    // no ISO at all -- so the start check found nothing missing and QEMU
+    // launched with no installation medium. The same gap swallowed the case
+    // where the mirror is unreachable: no ISO, no .part, no finding, and a
+    // machine that installs nothing.
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(&dir.path().join("vms"));
+    app.wizard.select("debian");
+    app.wizard.name = "Debian".to_string();
+    app.wizard.request_download();
+
+    let draft = app.wizard.take_draft().expect("there is a draft");
+    assert!(
+        !draft.cdroms.is_empty(),
+        "a machine that is waiting for an image must say so, not look complete"
+    );
+
+    let id = app.create_from_wizard(draft, 1).expect("created");
+    let vm = app.vms.iter().find(|v| v.id == id).unwrap().clone();
+    assert!(
+        faro_qem::preflight::blocks(&app.findings_for(&vm)),
+        "and the start check must hold the start: {:?}",
+        app.findings_for(&vm)
+    );
+}
+
+#[test]
+fn test_choosing_a_file_by_hand_is_not_overwritten_by_the_download() {
+    // I2: request_download was a one-way latch, so a user who clicked
+    // Download, changed their mind and browsed for the ISO they already had,
+    // got their choice thrown away seconds later -- and an 800 MB transfer
+    // they had cancelled in their head. Spec section 1's anti-goal verbatim.
+    let mut state = faro_qem::ui::wizard::WizardState::opened();
+    state.select("debian");
+    state.request_download();
+    assert!(state.wants_download());
+
+    // Naming a file is withdrawing the request to fetch one.
+    state.iso = r"D:\isos\debian-13.7.0-amd64-netinst.iso".to_string();
+    assert!(
+        !state.wants_download(),
+        "the user's own choice wins over a request they changed their mind about"
+    );
+
+    // And picking a template again starts over.
+    state.request_download();
+    state.select("alpine");
+    assert!(!state.wants_download(), "a new template is a fresh start");
+}
+
+#[test]
+fn test_deleting_a_machine_stops_its_download() {
+    // I3: the worker kept writing into a folder that was being removed, and
+    // on success renamed a multi-gigabyte image into a folder the user had
+    // just deleted.
+    let dir = tempdir().unwrap();
+    let mut app = common::app_with_vm_dir(&dir.path().join("vms"));
+    let id = alpine_in(&mut app, "Alpine");
+
+    let body = vec![4u8; 64 * 1024];
+    let target = dir.path().join("vms").join("x.iso");
+    app.downloads.insert(
+        id,
+        faro_qem::download::start(
+            std::sync::Arc::new(common::SlowHttp::serving(&body)),
+            faro_qem::download::Resolved {
+                url: "https://example/x.iso".to_string(),
+                file_name: "x.iso".to_string(),
+                sha256: "0".repeat(64),
+            },
+            target,
+        ),
+    );
+
+    app.delete_vm(id, false);
+
+    assert!(
+        !app.downloads.contains_key(&id),
+        "the handle goes with the machine"
+    );
+}

@@ -30,7 +30,7 @@ use crate::ui::settings::SettingsDialog;
 use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
 use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
 use crate::ui::vm_detail::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
-use crate::ui::wizard::{WizardAction, WizardDialog, WizardState};
+use crate::ui::wizard::{WizardAction, WizardDialog, WizardState, PENDING_ISO};
 
 /// FARO QEMU MANAGER central application state
 pub struct FaroQemApp {
@@ -84,13 +84,48 @@ pub struct FaroQemApp {
     pub selected_folder_for: Option<Uuid>,
     /// What this host has, asked once. The start check compares against it.
     pub host: HostFacts,
-    /// Downloads in flight, one per machine. Dropping a handle closes its
-    /// channel; the worker notices and stops, so quitting does not wait for
-    /// a six-gigabyte transfer.
+    /// Downloads in flight, one per machine. The worker does not watch its
+    /// channel -- every send discards its error -- so dropping a handle does
+    /// not stop it; setting its `cancel` flag does. Quitting is survivable
+    /// because the thread is detached and the process exits.
     pub downloads: HashMap<Uuid, DownloadHandle>,
     /// What to say about each running download, shown in the detail panel.
     /// The console gets the technical lines; this is the one sentence.
     pub download_status: HashMap<Uuid, String>,
+}
+
+/// Point the machine at a downloaded image, without losing anything else.
+///
+/// Only the placeholder is replaced. A machine can have a second CD-ROM —
+/// the virtio-win driver image, say — and the user can have named a file by
+/// hand between creation and the mirror answering; neither is ours to throw
+/// away.
+fn replace_pending_iso(vm: &mut VmConfig, path: &Path) {
+    if vm.cdroms.iter().any(|iso| iso == path) {
+        return;
+    }
+    match vm
+        .cdroms
+        .iter()
+        .position(|iso| iso == Path::new(PENDING_ISO))
+    {
+        Some(index) => vm.cdroms[index] = path.to_path_buf(),
+        None => vm.cdroms.push(path.to_path_buf()),
+    }
+}
+
+/// The partial file of a machine's first ISO, if it has one.
+///
+/// Used when a download is cancelled: the bytes belong to a machine that is
+/// going away, and a `.part` nobody will ever resume is litter that the
+/// start check would read as an unfinished download.
+fn part_of_first_iso(app: &FaroQemApp, id: Uuid) -> PathBuf {
+    app.vms
+        .iter()
+        .find(|v| v.id == id)
+        .and_then(|vm| vm.cdroms.first())
+        .map(|iso| crate::download::part_path(iso))
+        .unwrap_or_default()
 }
 
 /// Short, human-facing name for a configuration path.
@@ -568,6 +603,18 @@ impl FaroQemApp {
             .then(|| self.folder_to_delete_with(id))
             .flatten();
 
+        // The download goes first: the worker holds an append handle inside
+        // the folder that may be about to be removed, and on success it
+        // renames a multi-gigabyte image into it. Cancelling is what makes
+        // `remove_dir_all` below a race against nothing.
+        if let Some(handle) = self.downloads.remove(&id) {
+            handle
+                .cancel
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = std::fs::remove_file(part_of_first_iso(self, id));
+        }
+        self.download_status.remove(&id);
+
         let _ = self.stop_vm(id);
         self.status_map.remove(&id);
         self.console_logs.remove(&id);
@@ -626,7 +673,7 @@ impl FaroQemApp {
             self.i18n.tf("download_resolving", &[("name", source.key)]),
         ));
 
-        let handle = start_resolving(Arc::new(UreqHttp), source, folder);
+        let handle = start_resolving(Arc::new(UreqHttp::new()), source, folder);
         self.downloads.insert(id, handle);
         self.log(
             id,
@@ -694,11 +741,19 @@ impl FaroQemApp {
             // The one sentence the detail panel shows. Verifying wins over
             // progress: it is the later state, and a bar sitting at 100%
             // while the digest is computed looks stuck.
-            let shown_name = self
-                .vms
-                .iter()
-                .find(|v| v.id == id)
-                .and_then(|v| v.cdroms.first())
+            // The name comes from this drain's own Target when there is one:
+            // the machine's ISO is still the placeholder until it is applied
+            // a few lines below, and "Downloading : 0 B of 756 MB" names
+            // nothing.
+            let shown_name = target
+                .as_deref()
+                .or_else(|| {
+                    self.vms
+                        .iter()
+                        .find(|v| v.id == id)
+                        .and_then(|v| v.cdroms.first())
+                        .map(|p| p.as_path())
+                })
                 .and_then(|iso| iso.file_name())
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
@@ -715,8 +770,12 @@ impl FaroQemApp {
 
             if let Some(path) = target {
                 if let Some(vm) = self.vms.iter_mut().find(|v| v.id == id) {
-                    vm.cdroms.clear();
-                    vm.cdroms.push(path.clone());
+                    // Replace only the placeholder this download put there.
+                    // Clearing the list would throw away a path the user
+                    // chose by hand, or a second image they mounted since --
+                    // which is the anti-goal in spec section 1: something
+                    // quietly doing other than it says.
+                    replace_pending_iso(vm, &path);
                 }
                 self.save_vms_now();
                 self.log(id, format!("[DOWNLOAD] target: {}", path.display()));
@@ -731,10 +790,7 @@ impl FaroQemApp {
                 // ISO slot, so nothing has to be rewritten here -- unless the
                 // resolved name turned out different from the placeholder.
                 if let Some(vm) = self.vms.iter_mut().find(|v| v.id == id) {
-                    if !vm.cdroms.iter().any(|iso| iso == &path) {
-                        vm.cdroms.clear();
-                        vm.cdroms.push(path.clone());
-                    }
+                    replace_pending_iso(vm, &path);
                 }
                 self.save_vms_now();
                 let text = self.i18n.tf("download_done", &[("name", &file)]);
@@ -1026,10 +1082,7 @@ impl FaroQemApp {
                 self.selected_vm_id = Some(id);
             }
             SidebarAction::NewVm if self.settings.creation_mode == CreationMode::Wizard => {
-                self.wizard = WizardState {
-                    open: true,
-                    ..Default::default()
-                };
+                self.wizard = WizardState::opened();
             }
             SidebarAction::NewVm => {
                 let mut new_vm = VmConfig::default();
@@ -1065,6 +1118,37 @@ impl FaroQemApp {
                 let _ = self.stop_vm(id);
             }
             VmDetailAction::Save(_id) => {
+                self.save_vms_now();
+            }
+            VmDetailAction::Download(id) => {
+                if let Some(key) = self
+                    .vms
+                    .iter()
+                    .find(|v| v.id == id)
+                    .and_then(|v| v.template.as_deref())
+                    .and_then(VmTemplate::by_key)
+                    .and_then(|t| t.iso_source)
+                {
+                    self.begin_download(id, key);
+                }
+            }
+            VmDetailAction::CancelDownload(id) => {
+                // Stopping also clears the partial: a `.part` nobody will
+                // resume is what the start check reads as an unfinished
+                // download, so leaving it would hold the start for ever.
+                if let Some(handle) = self.downloads.remove(&id) {
+                    handle
+                        .cancel
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                self.download_status.remove(&id);
+                let part = part_of_first_iso(self, id);
+                let _ = std::fs::remove_file(&part);
+                if let Some(vm) = self.vms.iter_mut().find(|v| v.id == id) {
+                    // The placeholder meant "waiting for a download". There
+                    // is no longer one to wait for.
+                    vm.cdroms.retain(|iso| iso != Path::new(PENDING_ISO));
+                }
                 self.save_vms_now();
             }
         }
@@ -1309,6 +1393,22 @@ impl FaroQemApp {
         let download_status = self
             .selected_vm_id
             .and_then(|id| self.download_status.get(&id).cloned());
+        // Offering to fetch means: this machine came from a template with a
+        // mirror, nothing is running for it, and the image is not there yet.
+        // That last part is what makes one broken connection recoverable.
+        let can_resume = self
+            .selected_vm_id
+            .filter(|id| !self.downloads.contains_key(id))
+            .and_then(|id| self.vms.iter().find(|v| v.id == id))
+            .filter(|vm| {
+                vm.template
+                    .as_deref()
+                    .and_then(VmTemplate::by_key)
+                    .and_then(|t| t.iso_source)
+                    .and_then(source_for)
+                    .is_some()
+            })
+            .is_some_and(|vm| vm.cdroms.is_empty() || vm.cdroms.iter().any(|iso| !iso.is_file()));
 
         let mut detail_action = None;
         let mut empty_state_create = false;
@@ -1337,6 +1437,7 @@ impl FaroQemApp {
                     )
                     .with_vm_folder(selected_folder.as_deref())
                     .with_download_status(download_status.as_deref())
+                    .with_resumable_download(can_resume)
                     .with_console(console_buf)
                     .with_logo(self.logo_texture.as_ref())
                     .with_capabilities(&self.capabilities)
@@ -1389,7 +1490,7 @@ impl FaroQemApp {
             match action {
                 Some(WizardAction::Create { vm, disk_gb }) => {
                     let name = vm.name.clone();
-                    let wanted_download = self.wizard.download_requested;
+                    let wanted_download = self.wizard.wants_download();
                     let source = vm
                         .template
                         .as_deref()
