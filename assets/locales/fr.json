@@ -65,6 +65,7 @@
   "light": "Clair",
   "qemu_dir": "Répertoire binaire QEMU",
   "close": "Fermer",
+  "version": "Version {version}",
   "add_cdrom": "Ajouter un ISO CD/DVD",
   "action": "Action",
   "delete_confirm_msg": "Êtes-vous sûr de vouloir supprimer",

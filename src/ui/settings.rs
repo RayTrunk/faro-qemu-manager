@@ -358,8 +358,21 @@ impl<'a> SettingsDialog<'a> {
             ui.separator();
             ui.add_space(6.0);
 
-            // 5. Close Button
+            // 5. Version and close button. The version belongs here
+            // because every fault report starts with "which build?", and
+            // nobody should have to read the file properties of the
+            // executable to answer that. It comes from the package, so a
+            // release cannot leave this spot behind.
+            let weak = ui.visuals().weak_text_color();
             ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(
+                        self.i18n
+                            .tf("version", &[("version", env!("CARGO_PKG_VERSION"))]),
+                    )
+                    .size(11.0)
+                    .color(weak),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(self.i18n.t("close")).clicked() {
                         close_requested = true;
