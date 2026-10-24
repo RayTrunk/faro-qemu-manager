@@ -1,4 +1,4 @@
-use faro_qem::qemu::{spawn_qemu, QemuEvent, VmProcess};
+use faro_qem::qemu::{spawn_qemu, QemuEvent, VmProcess, LOG_MAX_BYTES};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -69,7 +69,7 @@ fn drain_events_until_exit(rx: &Receiver<QemuEvent>, timeout: Duration) -> Vec<Q
 fn test_spawn_nonexistent_binary() {
     let (tx, rx) = mpsc::channel();
     let bad_path = Path::new("faro_qem_non_existent_binary_xyz_12345.exe");
-    let result = spawn_qemu(bad_path, &[], tx);
+    let result = spawn_qemu(bad_path, &[], tx, None);
 
     assert!(
         result.is_err(),
@@ -92,7 +92,8 @@ fn test_spawn_rustc_stdout_streaming_and_exit() {
     let rustc = get_rustc_bin();
     let args = vec!["--version".to_string()];
 
-    let vm: VmProcess = spawn_qemu(&rustc, &args, tx).expect("Failed to spawn rustc --version");
+    let vm: VmProcess =
+        spawn_qemu(&rustc, &args, tx, None).expect("Failed to spawn rustc --version");
 
     assert!(vm.pid() > 0, "PID should be greater than 0");
     let debug_str = format!("{:?}", vm);
@@ -142,7 +143,7 @@ fn test_spawn_rustc_stderr_streaming_and_non_zero_exit() {
     let rustc = get_rustc_bin();
     let args = vec!["--invalid-faro-flag-xyz-test".to_string()];
 
-    let vm = spawn_qemu(&rustc, &args, tx).expect("Failed to spawn rustc with invalid flag");
+    let vm = spawn_qemu(&rustc, &args, tx, None).expect("Failed to spawn rustc with invalid flag");
 
     let events = drain_events_until_exit(&rx, Duration::from_secs(5));
 
@@ -215,7 +216,7 @@ fn test_spawn_multiple_lines_stdout_and_stderr() {
         }
     };
 
-    let vm = spawn_qemu(&bin, &args, tx).expect("Failed to spawn multi-line command");
+    let vm = spawn_qemu(&bin, &args, tx, None).expect("Failed to spawn multi-line command");
 
     let events = drain_events_until_exit(&rx, Duration::from_secs(5));
 
@@ -307,7 +308,7 @@ fn test_vm_process_kill_terminates_running_process() {
         }
     };
 
-    let mut vm = spawn_qemu(&bin, &args, tx).expect("Failed to spawn long-running process");
+    let mut vm = spawn_qemu(&bin, &args, tx, None).expect("Failed to spawn long-running process");
 
     // Wait until child signals ONLINE_NOW
     let start = Instant::now();
@@ -374,7 +375,7 @@ fn test_spawn_with_arguments_preserves_spaces_and_quotes() {
         "Quotes: \"and\" 'single'".to_string(),
     ];
 
-    let _vm = spawn_qemu(&py, &args, tx).expect("Failed to spawn python with spaced args");
+    let _vm = spawn_qemu(&py, &args, tx, None).expect("Failed to spawn python with spaced args");
 
     let events = drain_events_until_exit(&rx, Duration::from_secs(5));
 
@@ -399,5 +400,192 @@ fn test_spawn_with_arguments_preserves_spaces_and_quotes() {
             .any(|l| l.contains("ARG2:Quotes: \"and\" 'single'")),
         "ARG2 should preserve quotes. Stdout: {:?}",
         stdout_lines
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Part 4, task 5: a log file per machine, capped
+// ---------------------------------------------------------------------------
+
+/// A process that says one line and then stays up, with its output going to
+/// `log` as well as down the channel.
+///
+/// It keeps running so the test can look at the file while the readers still
+/// hold it open — a process that has already exited would prove nothing
+/// about the live path.
+fn spawn_echoing_process(tx: mpsc::Sender<QemuEvent>, log: Option<&Path>) -> VmProcess {
+    let (bin, args) = if let Some(py) = get_python_bin() {
+        let script = "import time, sys\n\
+                      sys.stdout.write('HELLO FROM THE GUEST\\n')\n\
+                      sys.stdout.flush()\n\
+                      time.sleep(30)\n";
+        (
+            py,
+            vec!["-u".to_string(), "-c".to_string(), script.to_string()],
+        )
+    } else {
+        #[cfg(windows)]
+        {
+            (
+                PathBuf::from("powershell.exe"),
+                vec![
+                    "-Command".to_string(),
+                    "Write-Output 'HELLO FROM THE GUEST'; Start-Sleep -Seconds 30".to_string(),
+                ],
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            (
+                PathBuf::from("sh"),
+                vec![
+                    "-c".to_string(),
+                    "echo 'HELLO FROM THE GUEST'; sleep 30".to_string(),
+                ],
+            )
+        }
+    };
+    spawn_qemu(&bin, &args, tx, log).expect("the echoing process starts")
+}
+
+/// Events seen within a short budget, without waiting for an exit.
+fn drain_events(rx: &Receiver<QemuEvent>) -> Vec<QemuEvent> {
+    let mut events = Vec::new();
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(event) => {
+                let said_something = matches!(event, QemuEvent::Stdout(_) | QemuEvent::Stderr(_));
+                events.push(event);
+                if said_something {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    events
+}
+
+#[test]
+fn test_what_the_process_says_lands_in_the_log_file_too() {
+    // Spec section 7.3, point 4: the pipes belong to the parent process that
+    // ended. Without a file, the console of a reattached machine is empty.
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("vm.log");
+    let (tx, rx) = mpsc::channel();
+    let mut proc = spawn_echoing_process(tx, Some(&log));
+    drain_events(&rx);
+    // Give the writer the moment between the channel and the file.
+    std::thread::sleep(Duration::from_millis(200));
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    let _ = proc.kill();
+    assert!(text.contains("HELLO FROM THE GUEST"), "got: {:?}", text);
+}
+
+#[test]
+fn test_a_log_past_the_cap_is_rotated_once_not_endless() {
+    // Review Focus 5: a file that fills the disk is damage, not a feature.
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("vm.log");
+    std::fs::write(&log, vec![b'x'; (LOG_MAX_BYTES + 1024) as usize]).unwrap();
+    let (tx, _rx) = mpsc::channel();
+    let mut proc = spawn_echoing_process(tx, Some(&log));
+    std::thread::sleep(Duration::from_millis(300));
+    let size = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(u64::MAX);
+    let kept = dir.path().join("vm.log.1");
+    let kept_exists = kept.exists();
+    let _ = proc.kill();
+    assert!(size < LOG_MAX_BYTES, "the log must start over, not grow");
+    assert!(kept_exists, "the previous log is kept once");
+}
+
+#[test]
+fn test_a_log_that_fills_up_while_the_machine_runs_is_rotated_too() {
+    // Review Focus 5 names the log of a machine that has been **running** a
+    // long time. The cap used to be checked only when the file was opened,
+    // so a handle taken on an empty file grew without end for the whole
+    // life of the machine.
+    let Some(py) = get_python_bin() else {
+        eprintln!("skipped: no python to produce a flood of lines");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("vm.log");
+    // Just under the cap, so a few lines push it over while the process
+    // writes -- without moving eight megabytes through the pipe.
+    std::fs::write(&log, vec![b'x'; (LOG_MAX_BYTES - 512) as usize]).unwrap();
+
+    let script = "import time, sys\n\
+                  for i in range(400): sys.stdout.write('line %d of the flood\\n' % i)\n\
+                  sys.stdout.flush()\n\
+                  time.sleep(30)\n";
+    let (tx, rx) = mpsc::channel();
+    let mut proc = spawn_qemu(
+        &py,
+        &["-u".to_string(), "-c".to_string(), script.to_string()],
+        tx,
+        Some(&log),
+    )
+    .expect("python starts");
+
+    drain_events(&rx);
+    std::thread::sleep(Duration::from_millis(600));
+    let size = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(u64::MAX);
+    let kept = dir.path().join("vm.log.1");
+    let kept_size = std::fs::metadata(&kept).map(|m| m.len()).unwrap_or(0);
+    let _ = proc.kill();
+
+    assert!(
+        size < LOG_MAX_BYTES,
+        "the running machine's log must start over, got {} bytes",
+        size
+    );
+    assert!(
+        kept_size >= LOG_MAX_BYTES - 512,
+        "and what it held is kept once, got {} bytes",
+        kept_size
+    );
+}
+
+#[test]
+fn test_only_one_previous_log_is_kept() {
+    // "Rotated once" means one predecessor, not a growing collection: two
+    // capped files on the disk are already one too many.
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("vm.log");
+    let kept = dir.path().join("vm.log.1");
+    std::fs::write(&kept, b"the older log").unwrap();
+    std::fs::write(&log, vec![b'x'; (LOG_MAX_BYTES + 1024) as usize]).unwrap();
+    let (tx, _rx) = mpsc::channel();
+    let mut proc = spawn_echoing_process(tx, Some(&log));
+    std::thread::sleep(Duration::from_millis(300));
+    let kept_size = std::fs::metadata(&kept).map(|m| m.len()).unwrap_or(0);
+    let count = std::fs::read_dir(dir.path()).unwrap().count();
+    let _ = proc.kill();
+    assert!(
+        kept_size > LOG_MAX_BYTES,
+        "the full log took the place of the older one, got {} bytes",
+        kept_size
+    );
+    assert_eq!(count, 2, "one log and one predecessor, nothing else");
+}
+
+#[test]
+fn test_a_log_that_cannot_be_written_does_not_stop_the_vm() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("as-a-file");
+    std::fs::write(&blocker, b"x").unwrap();
+    let (tx, rx) = mpsc::channel();
+    let mut proc = spawn_echoing_process(tx, Some(&blocker.join("vm.log")));
+    let events = drain_events(&rx);
+    let _ = proc.kill();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, QemuEvent::Stdout(l) if l.contains("HELLO FROM THE GUEST"))),
+        "the guest matters more than its log, got: {:?}",
+        events
     );
 }

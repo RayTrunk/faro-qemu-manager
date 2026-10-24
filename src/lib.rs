@@ -4,5 +4,7 @@ pub mod download;
 pub mod i18n;
 pub mod preflight;
 pub mod qemu;
+pub mod qmp;
+pub mod runstate;
 pub mod templates;
 pub mod ui;

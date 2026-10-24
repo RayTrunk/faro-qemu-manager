@@ -1,6 +1,8 @@
 // FARO QEMU MANAGER (C) R.Trunk 2026
 // Unit tests for Live Console & Logs Viewer Component
 
+mod common;
+
 use egui::Context;
 use faro_qem::config::{Arch, VmConfig};
 use faro_qem::i18n::I18n;
@@ -58,11 +60,9 @@ fn test_log_entry_creation_and_formatting() {
     assert_eq!(entry.timestamp, "12:00:00.000");
     assert_eq!(entry.formatted(), "[12:00:00.000] [OUT] QEMU initialized");
 
-    let entry_no_ts = LogEntry {
-        text: "Direct message".to_string(),
-        level: LogLevel::Error,
-        timestamp: String::new(),
-    };
+    // Built through the constructor: the lower-cased copy the filter uses
+    // is the type's own business, not the caller's.
+    let entry_no_ts = LogEntry::with_timestamp(LogLevel::Error, "Direct message", "");
     assert_eq!(entry_no_ts.formatted(), "[ERR] Direct message");
 }
 
@@ -327,4 +327,147 @@ fn test_vm_detail_with_console_logs_integration() {
     });
 
     assert_eq!(logs.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Part 4, task 7: a long console does not cost a long frame
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_the_console_lays_out_only_what_is_visible() {
+    let mut buf = ConsoleLogBuffer::new();
+    for n in 0..5000 {
+        buf.push_stdout(format!("line {}", n));
+    }
+    let shown = buf.visible_slice(4900, 50);
+    assert_eq!(
+        shown.len(),
+        50,
+        "a 5000-line buffer must not lay out 5000 lines per frame"
+    );
+    assert!(shown[0].text.contains("4900"));
+
+    // Asking past the end is what a shrinking buffer does to a scroll
+    // position, and must not panic.
+    assert!(buf.visible_slice(4990, 50).len() <= 10);
+    assert!(buf.visible_slice(9000, 50).is_empty());
+}
+
+#[test]
+fn test_the_filter_is_not_lowercased_per_line_per_frame() {
+    let mut buf = ConsoleLogBuffer::new();
+    for n in 0..2000 {
+        buf.push_stdout(format!("Line {} WARNING", n));
+    }
+    let started = std::time::Instant::now();
+    for _ in 0..20 {
+        assert_eq!(buf.matching("warning").len(), 2000);
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(400),
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn test_the_filter_matches_regardless_of_case_and_misses_what_it_should() {
+    let mut buf = ConsoleLogBuffer::new();
+    buf.push_stdout("ACPI table WARNING");
+    buf.push_stdout("all quiet");
+    assert_eq!(buf.matching("warning").len(), 1);
+    assert_eq!(buf.matching("WARNING").len(), 1);
+    assert_eq!(buf.matching("acpi").len(), 1);
+    assert!(buf.matching("kernel panic").is_empty());
+    assert_eq!(buf.matching("").len(), 2, "an empty filter hides nothing");
+}
+
+#[test]
+fn test_the_console_really_draws_its_lines() {
+    // show_rows draws only what is on screen, which is the point -- but a
+    // view that draws nothing at all would pass every other test here.
+    let ctx = Context::default();
+    let i18n = I18n::new("en");
+    let mut logs = ConsoleLogBuffer::new();
+    logs.push_stdout("SeaBIOS rel-1.16.3");
+    logs.push_stderr("ACPI table warning");
+
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ConsoleView::new(&mut logs, &i18n).is_running(true).show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains("SeaBIOS rel-1.16.3"),
+        "the console drew no lines:
+{}",
+        drawn
+    );
+    assert!(
+        drawn.contains("ACPI table warning"),
+        "drew:
+{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_a_filtered_console_draws_only_the_matching_lines() {
+    let ctx = Context::default();
+    let i18n = I18n::new("en");
+    let mut logs = ConsoleLogBuffer::new();
+    logs.push_stdout("SeaBIOS rel-1.16.3");
+    logs.push_stderr("ACPI table warning");
+    logs.filter = "acpi".to_string();
+
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ConsoleView::new(&mut logs, &i18n).is_running(true).show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains("ACPI table warning"),
+        "drew:
+{}",
+        drawn
+    );
+    assert!(
+        !drawn.contains("SeaBIOS"),
+        "the filter must hide what does not match, drew:
+{}",
+        drawn
+    );
+}
+
+#[test]
+fn test_a_filter_without_a_single_match_says_so() {
+    // It used to draw an empty black field with no word about why.
+    let ctx = Context::default();
+    let i18n = I18n::new("en");
+    let mut logs = ConsoleLogBuffer::new();
+    logs.push_stdout("SeaBIOS rel-1.16.3");
+    logs.filter = "kernel panic".to_string();
+
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ConsoleView::new(&mut logs, &i18n).is_running(true).show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+    assert!(
+        drawn.contains("kernel panic"),
+        "the filter that hid everything has to be named, drew:\n{}",
+        drawn
+    );
 }

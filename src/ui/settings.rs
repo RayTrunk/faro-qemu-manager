@@ -2,11 +2,10 @@
 // Settings dialog component
 
 use egui::Context;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::{default_vm_dir, AppSettings, Arch, CreationMode};
 use crate::i18n::I18n;
-use crate::qemu::find_qemu_binary;
 use crate::ui::theme::{apply_theme, icons, COLOR_RUNNING, COLOR_WARNING};
 
 /// Modal dialog for application settings
@@ -14,6 +13,15 @@ pub struct SettingsDialog<'a> {
     pub open: &'a mut bool,
     pub settings: &'a mut AppSettings,
     pub i18n: &'a mut I18n,
+    /// The emulator the application resolved, or `None` when it found
+    /// none. Handed in rather than searched for here: this dialog draws
+    /// every frame it is open, and the file system does not change between
+    /// two frames (spec section 7.2).
+    pub detected_qemu: Option<&'a Path>,
+    /// Whether the QEMU directory field has been typed in since it was
+    /// last reported. The caller owns it: this dialog is built anew for
+    /// every frame, so a flag of its own would forget on the next one.
+    pub qemu_dir_edited: Option<&'a mut bool>,
 }
 
 impl<'a> SettingsDialog<'a> {
@@ -23,7 +31,21 @@ impl<'a> SettingsDialog<'a> {
             open,
             settings,
             i18n,
+            detected_qemu: None,
+            qemu_dir_edited: None,
         }
+    }
+
+    /// Tell the dialog which emulator the application found.
+    pub fn with_detected_qemu(mut self, detected: Option<&'a Path>) -> Self {
+        self.detected_qemu = detected;
+        self
+    }
+
+    /// Lend the dialog the caller's memory of an unfinished edit.
+    pub fn editing_qemu_dir(mut self, edited: &'a mut bool) -> Self {
+        self.qemu_dir_edited = Some(edited);
+        self
     }
 
     /// Renders the settings dialog window.
@@ -229,6 +251,12 @@ impl<'a> SettingsDialog<'a> {
                         .desired_width(desired_width),
                 );
 
+                // Kept in the settings on every keystroke, but reported as
+                // modified only when the field is done: the application
+                // answers `modified` by probing QEMU, which starts five
+                // processes and takes the better part of a second. Doing
+                // that per keystroke froze the window for as long as it
+                // took to type a path.
                 if resp.changed() {
                     let trimmed = dir_str.trim();
                     self.settings.qemu_dir = if trimmed.is_empty() {
@@ -236,6 +264,18 @@ impl<'a> SettingsDialog<'a> {
                     } else {
                         Some(PathBuf::from(trimmed))
                     };
+                    if let Some(edited) = self.qemu_dir_edited.as_deref_mut() {
+                        *edited = true;
+                    } else {
+                        // No memory lent: report at once rather than lose it.
+                        modified = true;
+                    }
+                }
+                let edited_before = self.qemu_dir_edited.as_deref().copied().unwrap_or(false);
+                if resp.lost_focus() && edited_before {
+                    if let Some(edited) = self.qemu_dir_edited.as_deref_mut() {
+                        *edited = false;
+                    }
                     modified = true;
                 }
 
@@ -266,13 +306,11 @@ impl<'a> SettingsDialog<'a> {
 
             ui.add_space(6.0);
 
-            // Status indicator: check if find_qemu_binary finds a binary
-            let detected = find_qemu_binary(
-                self.settings.qemu_dir.as_deref(),
-                self.settings.default_arch,
-            );
-            ui.horizontal(|ui| match detected {
-                Some(ref bin_path) => {
+            // Status indicator: what the application resolved, not a fresh
+            // search. A directory the user just picked is reflected because
+            // the application re-resolves on that change.
+            ui.horizontal(|ui| match self.detected_qemu {
+                Some(bin_path) => {
                     ui.label(egui::RichText::new(icons::CHECK).color(COLOR_RUNNING));
                     ui.label(
                         egui::RichText::new(

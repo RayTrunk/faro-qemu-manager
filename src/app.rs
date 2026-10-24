@@ -2,16 +2,18 @@
 // Application State Integration & Main Controller
 
 use std::collections::HashMap;
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 use uuid::Uuid;
 
 use crate::config::{
     claim_vm_folder, containment, default_settings_path, default_vms_path, find_vm_folders,
     is_inside, quarantine_file, recovery_for, save_settings, save_vms, try_load_settings,
     try_load_vms, AppSettings, ConfigLoadError, ConfigRecovery, Containment, CreationMode,
-    Firmware, VmConfig,
+    DriveConfig, DriveFormat, DriveInterface, Firmware, VmConfig,
 };
 use crate::download::{
     human_bytes, source_for, start_resolving, DownloadEvent, DownloadHandle, UreqHttp,
@@ -23,14 +25,56 @@ use crate::qemu::{
     nvram_path_for, prepare_nvram, probe_capabilities, spawn_qemu, QemuCapabilities, QemuEvent,
     UefiFirmware, VmProcess,
 };
+use crate::qmp::{connect_tcp, free_local_port, qmp_args, uuid_args, Greeting, QmpClient};
+use crate::runstate::{self, now_secs, RunRecord};
 use crate::templates::VmTemplate;
 use crate::ui::console::ConsoleLogBuffer;
 use crate::ui::notice::{Notice, NoticeBar};
 use crate::ui::settings::SettingsDialog;
 use crate::ui::sidebar::{SidebarAction, SidebarView, VmStatus};
-use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY};
+use crate::ui::theme::{apply_theme, configure_modern_fonts, icons, COLOR_PRIMARY, COLOR_RUNNING};
 use crate::ui::vm_detail::{CreateDiskState, DetailTab, VmDetailAction, VmDetailView};
 use crate::ui::wizard::{WizardAction, WizardDialog, WizardState, PENDING_ISO};
+
+/// How this application holds a running machine.
+///
+/// A machine started here comes with a process handle and a channel of its
+/// output. A machine picked up again after the application was closed has
+/// neither: the pipes belonged to the parent that ended, and the process is
+/// nobody's child any more. It is still fully operable — the monitor and
+/// the process number are what the stop paths need — so the difference
+/// lives in the type rather than in a flag somebody forgets to check.
+pub enum Attached {
+    Owned {
+        proc: VmProcess,
+        rx: mpsc::Receiver<QemuEvent>,
+    },
+    Reattached {
+        pid: u32,
+    },
+}
+
+impl Attached {
+    /// The machine's process number, however it is held.
+    pub fn pid(&self) -> u32 {
+        match self {
+            Attached::Owned { proc, .. } => proc.pid(),
+            Attached::Reattached { pid } => *pid,
+        }
+    }
+}
+
+/// A disk image being made in a thread.
+///
+/// What the frame thread needs to remember while `qemu-img` works: where
+/// the answer arrives, which machine the image belongs to, and what to
+/// attach once it is there.
+pub struct DiskJob {
+    rx: mpsc::Receiver<Result<(), String>>,
+    attach_to: Option<Uuid>,
+    target: PathBuf,
+    format: DriveFormat,
+}
 
 /// FARO QEMU MANAGER central application state
 pub struct FaroQemApp {
@@ -46,8 +90,38 @@ pub struct FaroQemApp {
     pub active_tab: DetailTab,
     pub create_disk_modal: CreateDiskState,
     pub console_logs: HashMap<Uuid, ConsoleLogBuffer>,
-    pub running_processes: HashMap<Uuid, (VmProcess, mpsc::Receiver<QemuEvent>)>,
+    pub running_processes: HashMap<Uuid, Attached>,
     pub status_map: HashMap<Uuid, VmStatus>,
+    /// The QMP port each running machine was started with. This is what
+    /// makes a graceful shutdown possible at all; a machine missing from
+    /// here can only be stopped the hard way, and the interface says so
+    /// rather than quietly killing it.
+    pub qmp_ports: HashMap<Uuid, u16>,
+    /// Where the list of running machines is kept: `running.json`, beside
+    /// `vms.json` and never inside it (spec section 7.3).
+    pub runstate_path: PathBuf,
+    /// `qemu-img`, resolved beside the capabilities.
+    ///
+    /// Searching for it meant a handful of `is_file` calls while drawing,
+    /// sixty times a second, for an answer that only changes when the user
+    /// picks a different directory (spec section 7.2).
+    pub qemu_img: Option<PathBuf>,
+    /// The emulator for the default architecture, resolved at the same
+    /// time. The settings dialog shows it; a machine still resolves its own
+    /// on launch, because that depends on the machine's architecture.
+    pub qemu_binary: Option<PathBuf>,
+    /// The disk image being made right now, if any.
+    pub disk_job: Option<DiskJob>,
+    /// When the reattached machines were last asked whether they are still
+    /// there. They have no channel to report their end through.
+    last_liveness_check: Instant,
+    /// Whether `vms.json` was read successfully. A quarantined or refused
+    /// list must not make the run state look stale.
+    pub vms_loaded: bool,
+    /// Whether the QEMU directory field in the settings has been typed in
+    /// and not yet acted on. Probing QEMU costs five processes, so it waits
+    /// until the field is done rather than running per keystroke.
+    qemu_dir_edited: bool,
     pub cli_previews: HashMap<Uuid, String>,
     pub confirming_delete_id: Option<Uuid>,
     pub logo_texture: Option<egui::TextureHandle>,
@@ -234,6 +308,14 @@ impl FaroQemApp {
     ) -> Self {
         let mut notices: Vec<Notice> = Vec::new();
 
+        // The run state lives beside the machine list, whatever path that
+        // list was given -- a test with its own temporary directory must not
+        // reach into the real configuration directory.
+        let runstate_path = match vms_path.parent() {
+            Some(dir) => dir.join("running.json"),
+            None => PathBuf::from("running.json"),
+        };
+
         // Settings come first: the chosen language decides what language the
         // notices below are written in.
         let (settings, settings_write_blocked) = match try_load_settings(&settings_path) {
@@ -261,9 +343,17 @@ impl FaroQemApp {
         // A VM list that exists but could not be loaded is the user's data.
         // Writing a starter VM over it is precisely what used to destroy it, so
         // `may_seed` stays false for anything but an absent or readable file.
+        // Whether the machine list is the user's real one. A quarantined or
+        // refused file leaves this false, and then "this id is unknown" says
+        // nothing about a machine -- only about the file. A file that was
+        // never there is a different matter: it means there are no machines
+        // yet, and that answer is trustworthy.
+        let list_was_there = vms_path.exists();
+        let mut vms_loaded = true;
         let (mut vms, vms_write_blocked, may_seed) = match try_load_vms(&vms_path) {
             Ok(loaded) => (loaded, false, true),
             Err(why) => {
+                vms_loaded = !list_was_there;
                 let may_seed = recovery_for(&why) == ConfigRecovery::StartFresh;
                 let (notice, blocked) = recover_config(&i18n, &vms_path, &why);
                 notices.extend(notice);
@@ -286,8 +376,14 @@ impl FaroQemApp {
 
         let selected_vm_id = vms.first().map(|v| v.id);
 
-        let capabilities = find_qemu_binary(settings.qemu_dir.as_deref(), settings.default_arch)
-            .map(|bin| probe_capabilities(&bin))
+        // Resolved once here, read by every frame afterwards. The emulator
+        // is searched for anyway to probe the capabilities, so the answer is
+        // kept rather than thrown away.
+        let qemu_binary = find_qemu_binary(settings.qemu_dir.as_deref(), settings.default_arch);
+        let qemu_img = find_qemu_img(settings.qemu_dir.as_deref());
+        let capabilities = qemu_binary
+            .as_deref()
+            .map(probe_capabilities)
             .unwrap_or_default();
         let uefi_firmware = find_uefi_firmware(settings.qemu_dir.as_deref());
 
@@ -301,7 +397,7 @@ impl FaroQemApp {
             apply_theme(c, &settings.theme);
         }
 
-        Self {
+        let mut app = Self {
             settings,
             settings_path,
             vms,
@@ -316,6 +412,14 @@ impl FaroQemApp {
             console_logs: HashMap::new(),
             running_processes: HashMap::new(),
             status_map: HashMap::new(),
+            qmp_ports: HashMap::new(),
+            runstate_path,
+            qemu_img,
+            qemu_binary,
+            disk_job: None,
+            last_liveness_check: Instant::now(),
+            vms_loaded,
+            qemu_dir_edited: false,
             cli_previews: HashMap::new(),
             confirming_delete_id: None,
             logo_texture,
@@ -333,7 +437,13 @@ impl FaroQemApp {
             downloads: HashMap::new(),
             download_status: HashMap::new(),
             host: HostFacts::probe(),
-        }
+        };
+
+        // Last, with the machine list in hand: a record can only be matched
+        // to a machine that is known, and an unmatched one is cleaned up --
+        // but only if the list could be read at all.
+        app.reattach_running_vms();
+        app
     }
 
     /// Re-ask QEMU what it can do, after the directory or architecture changed.
@@ -348,6 +458,13 @@ impl FaroQemApp {
         .map(|bin| probe_capabilities(&bin))
         .unwrap_or_default();
         self.uefi_firmware = find_uefi_firmware(self.settings.qemu_dir.as_deref());
+        // The two resolved paths travel with the capabilities: all three
+        // answers depend on which QEMU is in use.
+        self.qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref());
+        self.qemu_binary = find_qemu_binary(
+            self.settings.qemu_dir.as_deref(),
+            self.settings.default_arch,
+        );
     }
 
     /// Point a duplicated machine at its own UEFI variable store.
@@ -615,7 +732,10 @@ impl FaroQemApp {
         }
         self.download_status.remove(&id);
 
-        let _ = self.stop_vm(id);
+        // Deleting a machine takes its process with it: the files are about
+        // to go, so asking the guest to shut down politely has nothing left
+        // to shut down onto.
+        let _ = self.force_stop_vm(id);
         self.status_map.remove(&id);
         self.console_logs.remove(&id);
         self.cli_previews.remove(&id);
@@ -906,7 +1026,12 @@ impl FaroQemApp {
         let mut exited_ids = Vec::new();
         let mut repaint_requested = false;
 
-        for (&id, (proc, rx)) in self.running_processes.iter_mut() {
+        for (&id, attached) in self.running_processes.iter_mut() {
+            // A reattached machine has no channel: its output goes to its
+            // log file, which the reattach read into the console once.
+            let Attached::Owned { proc, rx } = attached else {
+                continue;
+            };
             let log_buf = self.console_logs.entry(id).or_default();
             loop {
                 match rx.try_recv() {
@@ -958,6 +1083,11 @@ impl FaroQemApp {
 
         for id in exited_ids {
             self.running_processes.remove(&id);
+            // The monitor died with the process; a port left behind here
+            // would offer a shutdown that cannot reach anything, and a
+            // record left behind would be a ghost at the next start.
+            self.qmp_ports.remove(&id);
+            self.forget_running(id);
         }
 
         if repaint_requested {
@@ -1025,7 +1155,7 @@ impl FaroQemApp {
             }
         }
 
-        let args = match build_qemu_args(&vm, self.uefi_firmware.as_ref()) {
+        let mut args = match build_qemu_args(&vm, self.uefi_firmware.as_ref()) {
             Ok(args) => args,
             Err(err_msg) => {
                 self.status_map.insert(id, VmStatus::Error(err_msg.clone()));
@@ -1034,15 +1164,45 @@ impl FaroQemApp {
                 return Err(err_msg);
             }
         };
+
+        // The monitor the shutdown button speaks through. The port is asked
+        // for, never chosen: on this host whole ranges refuse to be bound.
+        // Failing to find one is not a reason to refuse the machine -- it
+        // starts, and the panel then says that only the hard stop is left.
+        self.qmp_ports.remove(&id);
+        match free_local_port() {
+            Ok(port) => {
+                args.extend(qmp_args(port));
+                // The machine's own id as its machine UUID, so the reattach
+                // can ask *which* machine answers on a recorded port rather
+                // than only whether some QEMU does.
+                args.extend(uuid_args(&id.to_string()));
+                self.qmp_ports.insert(id, port);
+            }
+            Err(e) => {
+                let log_buf = self.console_logs.entry(id).or_default();
+                log_buf.push_error(format!(
+                    "[QMP] no monitor for this machine: {} -- only a hard stop will be available",
+                    e
+                ));
+            }
+        }
+
         let cli_str = format!("{} {}", bin_path.display(), shell_words::join(&args));
         self.cli_previews.insert(id, cli_str);
 
         let (tx, rx) = mpsc::channel();
-        match spawn_qemu(&bin_path, &args, tx) {
+        // Everything the machine says also goes into its own file, so a
+        // guest that outlived the application still has a console to come
+        // back to (spec section 7.3, point 4).
+        let log_path = self.log_path_for(id);
+        match spawn_qemu(&bin_path, &args, tx, Some(&log_path)) {
             Ok(proc) => {
                 let pid = proc.pid();
-                self.running_processes.insert(id, (proc, rx));
+                self.running_processes
+                    .insert(id, Attached::Owned { proc, rx });
                 self.status_map.insert(id, VmStatus::Running { pid });
+                self.record_running(id, pid);
                 let log_buf = self.console_logs.entry(id).or_default();
                 log_buf.push_system(format!("[PROCESS] QEMU started with PID {}", pid));
                 self.active_tab = DetailTab::Console;
@@ -1061,12 +1221,473 @@ impl FaroQemApp {
         }
     }
 
-    /// Stop a virtual machine by ID
-    pub fn stop_vm(&mut self, id: Uuid) -> Result<(), String> {
-        if let Some((mut proc, _)) = self.running_processes.remove(&id) {
-            let res = proc.kill();
+    /// Whether this application still holds the machine's process.
+    pub fn is_attached(&self, id: Uuid) -> bool {
+        self.running_processes.contains_key(&id)
+    }
+
+    /// Where this machine's console log lives.
+    ///
+    /// Inside the machine's own folder when it has one, so the log goes
+    /// when the folder goes; otherwise under `logs/` beside the
+    /// configuration, named after the machine.
+    pub fn log_path_for(&self, id: Uuid) -> PathBuf {
+        if let Some(folder) = find_vm_folders(&self.settings.vm_dir_or_default(), id).pop() {
+            return folder.join("console.log");
+        }
+        let base = self
+            .runstate_path
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_default();
+        base.join("logs").join(format!("{}.log", id))
+    }
+
+    /// Note this machine in the run state file, so the next start of the
+    /// application can find it again.
+    ///
+    /// A failure is reported on the machine's console and nowhere else: the
+    /// guest is running, and a scratch file that could not be written is no
+    /// reason to tell the user their machine failed.
+    fn record_running(&mut self, id: Uuid, pid: u32) {
+        let Some(&qmp_port) = self.qmp_ports.get(&id) else {
+            // Nothing to reattach to without a monitor, and a record
+            // claiming otherwise would offer a shutdown that cannot work.
+            return;
+        };
+        let record = RunRecord {
+            vm_id: id,
+            pid,
+            qmp_port,
+            started_at: now_secs(),
+            log: self.log_path_for(id),
+        };
+        if let Err(e) = runstate::put(&self.runstate_path, record) {
+            self.console_logs
+                .entry(id)
+                .or_default()
+                .push_error(format!("[STATE] {}", e));
+        }
+    }
+
+    /// Drop this machine from the run state file.
+    fn forget_running(&mut self, id: Uuid) {
+        let _ = runstate::remove(&self.runstate_path, id);
+    }
+
+    /// Pick up the machines that outlived the last run of the application.
+    ///
+    /// The record is a lead, not proof. A process number proves nothing —
+    /// the operating system hands them out again — and a handshake on the
+    /// recorded port proves only that *a* QEMU is there, which on a reused
+    /// loopback port can be a different machine of ours. Both have to agree,
+    /// and the machine has to say its own id: only then is it adopted.
+    ///
+    /// Anything that cannot be confirmed is treated as ended and its record
+    /// dropped (spec section 7.3). Nothing is ever killed here: whatever is
+    /// on the other end of an unconfirmable record is somebody else's
+    /// program.
+    pub fn reattach_running_vms(&mut self) {
+        for record in runstate::load(&self.runstate_path) {
+            let known = self.vms.iter().any(|v| v.id == record.vm_id);
+            if !known {
+                if !self.vms_loaded {
+                    // The machine list could not be read, so "unknown" says
+                    // nothing about this record. Part 1 took great care never
+                    // to overwrite an unreadable vms.json; deleting a
+                    // perfectly good running.json beside it would orphan
+                    // every guest for good -- the record is the only way
+                    // back to them once the configuration is repaired.
+                    continue;
+                }
+                // The machine was deleted while it was running, or the file
+                // belongs to another configuration.
+                self.forget_running(record.vm_id);
+                continue;
+            }
+
+            match confirm_identity(record.qmp_port, record.vm_id) {
+                Ok(greeting) => {
+                    self.running_processes
+                        .insert(record.vm_id, Attached::Reattached { pid: record.pid });
+                    self.qmp_ports.insert(record.vm_id, record.qmp_port);
+                    self.status_map
+                        .insert(record.vm_id, VmStatus::Running { pid: record.pid });
+                    self.read_console_from_log(record.vm_id, &record.log);
+                    let log_buf = self.console_logs.entry(record.vm_id).or_default();
+                    log_buf.push_system(format!(
+                        "[QMP] reattached to QEMU {}.{}.{} with PID {}",
+                        greeting.major, greeting.minor, greeting.micro, record.pid
+                    ));
+                }
+                Err(_) => {
+                    self.forget_running(record.vm_id);
+                }
+            }
+        }
+    }
+
+    /// Fill a reattached machine's console from its log file.
+    ///
+    /// The pipes belonged to the parent that ended, so the file is the only
+    /// account of what the guest said. The first line says where this comes
+    /// from: a console that silently mixes a file with live output would
+    /// make the user guess which is which.
+    fn read_console_from_log(&mut self, id: Uuid, log: &Path) {
+        let text = match std::fs::read_to_string(log) {
+            Ok(text) => text,
+            Err(e) => {
+                let notice = self
+                    .i18n
+                    .tf("console_log_unreadable", &[("error", &e.to_string())]);
+                self.console_logs.entry(id).or_default().push_error(notice);
+                return;
+            }
+        };
+
+        // Only the tail: the buffer is for reading, and a capped log can
+        // still hold tens of thousands of lines.
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines.len().saturating_sub(CONSOLE_FROM_LOG_LINES);
+        let log_buf = self.console_logs.entry(id).or_default();
+        log_buf.push_system(
+            self.i18n
+                .tf("console_from_log", &[("path", &log.display().to_string())]),
+        );
+        for line in &lines[start..] {
+            log_buf.push_stdout(*line);
+        }
+    }
+
+    /// A monitor for this machine, with its identity proven on the spot.
+    ///
+    /// The record is a lead at every use, not only at start-up. A machine
+    /// this application did not start is held by a process number and a
+    /// port, and both are handed out again by the operating system: by the
+    /// time a button is pressed, the number can belong to a stranger and
+    /// the port to a different machine of ours. So the handshake and the
+    /// machine's own id are checked here, every time, before anything is
+    /// sent or stopped.
+    ///
+    /// A machine that cannot prove itself counts as ended and is cleaned up
+    /// (spec section 7.3). Nothing is killed on that path.
+    fn proven_monitor(&mut self, id: Uuid) -> Result<(QmpClient<TcpStream>, Greeting), String> {
+        let Some(&port) = self.qmp_ports.get(&id) else {
+            return Err(self.i18n.t("shutdown_unavailable").to_string());
+        };
+        let (mut client, greeting) = connect_qmp(port).map_err(|e| {
+            self.mark_ended(id);
+            format!("127.0.0.1:{}: {}", port, e)
+        })?;
+
+        let reported = client.machine_uuid().inspect_err(|_| {
+            self.mark_ended(id);
+        })?;
+        if !reported.eq_ignore_ascii_case(&id.to_string()) {
+            // Someone else's machine is on that port now. Letting a command
+            // through here would shut down a guest the user never named.
+            self.mark_ended(id);
+            return Err(format!(
+                "127.0.0.1:{} answers for {}, not for {}",
+                port, reported, id
+            ));
+        }
+        Ok((client, greeting))
+    }
+
+    /// End a reattached machine through its monitor.
+    ///
+    /// `quit` was checked against QEMU 11.1.0: it ends the process and
+    /// answers with a SHUTDOWN event and a return. A machine that cannot
+    /// prove its identity is not killed by any means -- it counts as ended
+    /// and is cleaned up (spec section 7.3). That can leave a guest running
+    /// that nobody holds any more, which is the lesser harm: the
+    /// alternative is killing a stranger.
+    fn force_stop_reattached(&mut self, id: Uuid) -> Result<(), String> {
+        match self.proven_monitor(id) {
+            Ok((mut client, _)) => {
+                let outcome = client.quit();
+                let events = client.take_events();
+                drop(client);
+                self.running_processes.remove(&id);
+                self.qmp_ports.remove(&id);
+                self.forget_running(id);
+                self.status_map.insert(id, VmStatus::Stopped);
+                let log_buf = self.console_logs.entry(id).or_default();
+                match &outcome {
+                    Ok(()) => log_buf.push_system("[QMP] quit; the machine has ended"),
+                    Err(e) => log_buf.push_error(format!("[QMP] quit refused: {}", e)),
+                }
+                for event in events {
+                    log_buf.push_system(format!("[QMP] {}", event));
+                }
+                outcome
+            }
+            Err(reason) => {
+                // proven_monitor has already cleaned the machine up.
+                self.console_logs
+                    .entry(id)
+                    .or_default()
+                    .push_error(format!("[QMP] {}", reason));
+                Ok(())
+            }
+        }
+    }
+
+    /// Treat this machine as ended: nothing left to hold, nothing killed.
+    fn mark_ended(&mut self, id: Uuid) {
+        self.running_processes.remove(&id);
+        self.qmp_ports.remove(&id);
+        self.forget_running(id);
+        self.status_map.insert(id, VmStatus::Stopped);
+        self.console_logs.entry(id).or_default().push_system(
+            "[QMP] the monitor no longer answers for this machine; it counts as ended",
+        );
+    }
+
+    /// Ask the machines this application only reattached to whether they are
+    /// still there.
+    ///
+    /// A machine it started itself reports its end through its channel. A
+    /// reattached one has no channel, so without this it would stay
+    /// "running" for the rest of the session -- the start button silently
+    /// doing nothing, and the hard way the only thing left.
+    pub fn recheck_reattached(&mut self) {
+        let reattached: Vec<Uuid> = self
+            .running_processes
+            .iter()
+            .filter(|(_, a)| matches!(a, Attached::Reattached { .. }))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in reattached {
+            let Some(&port) = self.qmp_ports.get(&id) else {
+                self.mark_ended(id);
+                continue;
+            };
+            match confirm_identity_within(port, id, LIVENESS_BUDGET) {
+                Ok(_) => {}
+                Err(_) => self.mark_ended(id),
+            }
+        }
+        self.last_liveness_check = Instant::now();
+    }
+
+    /// Make a disk image without freezing the window.
+    ///
+    /// `qemu-img` needs seconds to minutes for a large image, and the frame
+    /// thread cannot wait that long (spec section 7.2). The work goes to a
+    /// thread; `poll_disk_creation` picks up the answer. The finished image
+    /// is attached to the machine that was selected when this started —
+    /// which is the machine whose panel the dialog belongs to.
+    pub fn start_disk_creation(&mut self, target: PathBuf, format: DriveFormat, size_gb: u32) {
+        let Some(img) = self.qemu_img.clone() else {
+            self.create_disk_modal.status_msg =
+                Some(Err(self.i18n.t("qemu_img_missing").to_string()));
+            return;
+        };
+        if self.disk_job.is_some() {
+            // One at a time: two qemu-img runs on one path would fight.
+            self.create_disk_modal.status_msg = Some(Ok(self.i18n.t("disk_creating").to_string()));
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let job_target = target.clone();
+        let worker = std::thread::Builder::new()
+            .name("faro-create-disk".to_string())
+            .spawn(move || {
+                let outcome = create_disk_image(&img, &job_target, format, size_gb);
+                let _ = tx.send(outcome);
+            });
+
+        match worker {
+            Ok(_) => {
+                self.disk_job = Some(DiskJob {
+                    rx,
+                    attach_to: self.selected_vm_id,
+                    target,
+                    format,
+                });
+            }
+            Err(e) => {
+                self.create_disk_modal.status_msg = Some(Err(e.to_string()));
+            }
+        }
+    }
+
+    /// Collect the result of a disk being made, if there is one yet.
+    ///
+    /// Called once per frame and never waits. A finished image is attached
+    /// to the machine that asked for it and the list is saved, so the
+    /// machine does not point at a file that only exists in this session.
+    pub fn poll_disk_creation(&mut self) {
+        let Some(job) = &self.disk_job else {
+            return;
+        };
+        let outcome = match job.rx.try_recv() {
+            Ok(outcome) => outcome,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("the disk image worker stopped without saying why".to_string())
+            }
+        };
+
+        let job = self.disk_job.take().expect("checked just above");
+        self.create_disk_modal.busy = false;
+        match outcome {
+            Ok(()) => {
+                if let Some(vm) = self.vms.iter_mut().find(|v| Some(v.id) == job.attach_to) {
+                    vm.drives.push(DriveConfig {
+                        path: job.target,
+                        format: job.format,
+                        interface: DriveInterface::VirtIO,
+                        boot_index: None,
+                    });
+                }
+                self.create_disk_modal.status_msg =
+                    Some(Ok(self.i18n.t("disk_created").to_string()));
+                // Done and attached, so the dialog has nothing left to say.
+                self.create_disk_modal.open = false;
+                self.save_vms_now();
+            }
+            Err(e) => {
+                // Said twice on purpose: in the dialog, which stays open for
+                // it, and as a notice -- the one place that survives the
+                // user having closed the dialog in the meantime. A write
+                // that failed must be reported, not swallowed (spec 4).
+                self.create_disk_modal.status_msg = Some(Err(e.clone()));
+                self.create_disk_modal.open = true;
+                let notice = Notice::error(self.i18n.tf("disk_create_failed", &[("error", &e)]));
+                self.push_notice(notice);
+            }
+        }
+    }
+
+    /// The machines that keep running when this window closes.
+    ///
+    /// Closing is not a reason to kill a guest (spec section 7.3), so the
+    /// user is told which ones carry on -- stated, not asked: carrying on
+    /// is the wanted behaviour, and a dialog that interrupts a shutdown of
+    /// the host to ask about it would be in the way.
+    pub fn surviving_vm_names(&self) -> Vec<String> {
+        self.running_processes
+            .keys()
+            .map(|id| match self.vms.iter().find(|v| v.id == *id) {
+                Some(vm) => vm.name.clone(),
+                None => id.to_string(),
+            })
+            .collect()
+    }
+
+    /// Forget this machine's monitor port.
+    ///
+    /// What a machine started by an older version of the application looks
+    /// like, and what happens when no port could be found. The guest keeps
+    /// running; only the graceful path is gone.
+    pub fn drop_qmp_port(&mut self, id: Uuid) {
+        self.qmp_ports.remove(&id);
+    }
+
+    /// Ask the guest to shut itself down.
+    ///
+    /// This is what the stop button does, and it never kills (spec section
+    /// 7.1). Without a monitor, or when the monitor does not answer, the
+    /// machine is left exactly as it was and the reason is returned so the
+    /// interface can say it -- silently falling back to killing would make a
+    /// liar of the button.
+    pub fn shutdown_vm(&mut self, id: Uuid) -> Result<(), String> {
+        let (mut client, greeting) = match self.proven_monitor(id) {
+            Ok(pair) => pair,
+            Err(reason) => {
+                self.console_logs
+                    .entry(id)
+                    .or_default()
+                    .push_error(format!("[QMP] {}", reason));
+                return Err(reason);
+            }
+        };
+
+        if let Err(e) = client.powerdown() {
+            self.console_logs
+                .entry(id)
+                .or_default()
+                .push_error(format!("[QMP] system_powerdown refused: {}", e));
+            return Err(e);
+        }
+
+        let pid = self
+            .status_map
+            .get(&id)
+            .and_then(|s| s.pid())
+            .or_else(|| self.running_processes.get(&id).map(|a| a.pid()))
+            .unwrap_or(0);
+        self.status_map.insert(
+            id,
+            VmStatus::ShuttingDown {
+                pid,
+                since: SystemTime::now(),
+            },
+        );
+
+        let log_buf = self.console_logs.entry(id).or_default();
+        log_buf.push_system(format!(
+            "[QMP] shutdown requested of QEMU {}.{}.{}",
+            greeting.major, greeting.minor, greeting.micro
+        ));
+        // What the machine itself reported, not what we assume it did.
+        for event in client.take_events() {
+            log_buf.push_system(format!("[QMP] {}", event));
+        }
+        Ok(())
+    }
+
+    /// Pull the plug on a virtual machine.
+    ///
+    /// The second, named step: the user asked for this one explicitly, after
+    /// a shutdown that did not finish or on a machine that has no monitor.
+    pub fn force_stop_vm(&mut self, id: Uuid) -> Result<(), String> {
+        // A machine this application did not start is nobody's child. There
+        // is no handle, only a recorded process number -- and the operating
+        // system hands those out again, so taskkill on one would reach
+        // whoever holds it now. Its hard way goes through its own monitor,
+        // identity proven first: what dies is what just said who it is.
+        if matches!(
+            self.running_processes.get(&id),
+            Some(Attached::Reattached { .. })
+        ) {
+            return self.force_stop_reattached(id);
+        }
+
+        self.qmp_ports.remove(&id);
+        self.forget_running(id);
+        if let Some(attached) = self.running_processes.remove(&id) {
+            // Its own child: the handle is the identity, and killing it can
+            // reach nothing else.
+            let (res, rx) = match attached {
+                Attached::Owned { mut proc, rx } => (proc.kill(), Some(rx)),
+                // Handled above; kept exhaustive rather than unreachable.
+                Attached::Reattached { .. } => (Ok(()), None),
+            };
+            // Read what is still in the channel before it is dropped. Taking
+            // the receiver away with the process threw out QEMU's last words
+            // and its exit event, which is exactly what a user looks for
+            // after a stop that surprised them.
+            let deadline = Instant::now() + LAST_WORDS_BUDGET;
             let log_buf = self.console_logs.entry(id).or_default();
             log_buf.push_system("[PROCESS] QEMU process terminated");
+            while let (Some(rx), true) = (rx.as_ref(), Instant::now() < deadline) {
+                match rx.recv_timeout(Duration::from_millis(25)) {
+                    Ok(event) => {
+                        let ended = matches!(event, QemuEvent::Exited(_));
+                        log_buf.handle_event(&event);
+                        if ended {
+                            break;
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
             self.status_map.insert(id, VmStatus::Stopped);
             res
         } else {
@@ -1114,11 +1735,27 @@ impl FaroQemApp {
             VmDetailAction::Launch(id) => {
                 let _ = self.launch_vm(id, ctx);
             }
-            VmDetailAction::Stop(id) => {
-                let _ = self.stop_vm(id);
+            VmDetailAction::Shutdown(id) => {
+                // The reason is already on the machine's console; nothing is
+                // killed when this fails.
+                let _ = self.shutdown_vm(id);
+            }
+            VmDetailAction::ForceStop(id) => {
+                let _ = self.force_stop_vm(id);
             }
             VmDetailAction::Save(_id) => {
                 self.save_vms_now();
+            }
+            VmDetailAction::CreateDisk {
+                id,
+                path,
+                format,
+                size_gb,
+            } => {
+                // The dialog belongs to the machine whose panel it was
+                // opened from, so that machine gets the image.
+                self.selected_vm_id = Some(id);
+                self.start_disk_creation(path, format, size_gb);
             }
             VmDetailAction::Download(id) => {
                 if let Some(key) = self
@@ -1187,6 +1824,24 @@ impl FaroQemApp {
         // Emptied without waiting: a frame that blocks on a mirror is the
         // frozen interface spec section 6 forbids.
         self.process_download_events();
+        // Same for a disk image being made: asked after, never waited on.
+        self.poll_disk_creation();
+        // A reattached machine has no channel to report its end through, so
+        // it is asked -- rarely, and with a short deadline.
+        if self.last_liveness_check.elapsed() >= LIVENESS_EVERY {
+            self.recheck_reattached();
+        }
+
+        // eframe draws when something happens. A hanging guest says nothing,
+        // so nothing would ask for the next frame: the waiting state would
+        // stand at "0 s" and the hard way would never appear beside it
+        // (Review Focus 2). The same goes for the liveness check above and
+        // for a disk image being made in a thread.
+        if self.disk_job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        } else if !self.running_processes.is_empty() {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
 
         let mut menu_sidebar_action: Option<SidebarAction> = None;
         let mut menu_detail_action: Option<VmDetailAction> = None;
@@ -1202,6 +1857,10 @@ impl FaroQemApp {
             });
             self.notices = notices;
         }
+
+        // Worked out before the menu is drawn: the closure below holds the
+        // application mutably, and this reads it.
+        let surviving = self.surviving_vm_names();
 
         // 3. Top Menu Bar (Global application commands & Settings)
         egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
@@ -1250,6 +1909,18 @@ impl FaroQemApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    // Said before the click, not after: a notice shown while
+                    // the window is going away is a notice nobody reads.
+                    if !surviving.is_empty() {
+                        ui.label(
+                            egui::RichText::new(
+                                self.i18n
+                                    .tf("vms_keep_running", &[("names", &surviving.join(", "))]),
+                            )
+                            .size(11.0)
+                            .color(COLOR_RUNNING),
+                        );
+                    }
                     if ui
                         .button(format!("{} {}", icons::CLOSE, self.i18n.t("exit")))
                         .clicked()
@@ -1283,12 +1954,34 @@ impl FaroQemApp {
                     if ui
                         .add_enabled(
                             has_vm && is_running,
-                            egui::Button::new(format!("{} {}", icons::STOP, self.i18n.t("stop"))),
+                            egui::Button::new(format!(
+                                "{} {}",
+                                icons::STOP,
+                                self.i18n.t("shutdown")
+                            )),
                         )
                         .clicked()
                     {
                         if let Some(id) = self.selected_vm_id {
-                            menu_detail_action = Some(VmDetailAction::Stop(id));
+                            menu_detail_action = Some(VmDetailAction::Shutdown(id));
+                        }
+                        ui.close_menu();
+                    }
+                    // The hard way is its own entry here too, never a
+                    // fallback hidden behind the one above.
+                    if ui
+                        .add_enabled(
+                            has_vm && is_running,
+                            egui::Button::new(format!(
+                                "{} {}",
+                                icons::STOP,
+                                self.i18n.t("force_stop")
+                            )),
+                        )
+                        .clicked()
+                    {
+                        if let Some(id) = self.selected_vm_id {
+                            menu_detail_action = Some(VmDetailAction::ForceStop(id));
                         }
                         ui.close_menu();
                     }
@@ -1422,8 +2115,12 @@ impl FaroQemApp {
                         .map(|s| s.is_running())
                         .unwrap_or(false);
                     let pid = self.status_map.get(&id).and_then(|s| s.pid());
+                    let shutting_down_since = self
+                        .status_map
+                        .get(&id)
+                        .and_then(|s| s.shutting_down_since());
                     let cli_cmd = self.cli_previews.get(&id).map(|s| s.as_str());
-                    let qemu_img = find_qemu_img(self.settings.qemu_dir.as_deref());
+                    let qemu_img = self.qemu_img.clone();
                     let findings = self.findings_for(&self.vms[pos]);
 
                     let console_buf = self.console_logs.entry(id).or_default();
@@ -1442,6 +2139,7 @@ impl FaroQemApp {
                     .with_logo(self.logo_texture.as_ref())
                     .with_capabilities(&self.capabilities)
                     .with_firmware(self.uefi_firmware.is_some())
+                    .with_shutdown(self.qmp_ports.contains_key(&id), shutting_down_since)
                     .with_findings(&findings);
 
                     if let Some(p) = pid {
@@ -1470,9 +2168,23 @@ impl FaroQemApp {
 
         // 5. Modal Settings Dialog
         if self.settings_open {
+            // Cloned out of the field first: the dialog borrows the settings
+            // mutably, and the resolved path lives beside them.
+            let detected = self.qemu_binary.clone();
+            let mut edited = self.qemu_dir_edited;
             let mut dialog =
-                SettingsDialog::new(&mut self.settings_open, &mut self.settings, &mut self.i18n);
-            if dialog.show(ctx) {
+                SettingsDialog::new(&mut self.settings_open, &mut self.settings, &mut self.i18n)
+                    .with_detected_qemu(detected.as_deref())
+                    .editing_qemu_dir(&mut edited);
+            let modified = dialog.show(ctx);
+            // The dialog's borrows end here; the flag goes back to the app.
+            self.qemu_dir_edited = edited;
+            // A path typed and then closed away without leaving the field
+            // still has to take effect -- otherwise the setting would sit
+            // in memory, unsaved and unprobed.
+            let closed_with_an_unfinished_edit = !self.settings_open && self.qemu_dir_edited;
+            if modified || closed_with_an_unfinished_edit {
+                self.qemu_dir_edited = false;
                 self.refresh_capabilities();
                 self.save_settings_now();
                 apply_theme(ctx, &self.settings.theme);
@@ -1561,10 +2273,121 @@ impl FaroQemApp {
     }
 }
 
+/// How long to keep trying to reach a machine's monitor.
+///
+/// A monitor that is there answers in well under a millisecond, so this
+/// budget is not paid in normal use; it covers the moment right after a
+/// start, when QEMU has been handed the port but has not finished binding
+/// it. A connection to a port nothing is listening on is refused at once
+/// rather than hanging, which is why retrying -- not a single long timeout
+/// -- is what bounds this.
+///
+/// Measured, not guessed: on this host a freshly launched QEMU accepts on
+/// its monitor port after 511, 512, 535 and 542 ms across four runs
+/// (q35 with WHPX, 256 MB, no display). So anything under about 700 ms
+/// would make a shutdown right after a start fail -- and this budget is
+/// paid in full only when nothing is listening at all, where the user is
+/// waiting for a sentence rather than for a connection. 1.2 seconds
+/// leaves room above the measurement without reading as a freeze.
+const QMP_CONNECT_BUDGET: Duration = Duration::from_millis(1200);
+
+/// How long a stop waits for the process's last lines and its exit.
+///
+/// The reader threads are still draining the pipes when `kill` returns, and
+/// the receiving end is about to be dropped. Half a second is enough for a
+/// process that has just been killed and short enough not to be felt as a
+/// freeze; what does not arrive in time is in the machine's log file.
+const LAST_WORDS_BUDGET: Duration = Duration::from_millis(500);
+
+/// How many lines of a machine's log file go into its console on reattach.
+///
+/// Enough to see how the guest got where it is, bounded so that a capped
+/// but still large log does not go into memory whole.
+const CONSOLE_FROM_LOG_LINES: usize = 500;
+
+/// How long a reattach waits for an answer on a recorded port.
+///
+/// Short on purpose: this runs at start-up, once per recorded machine, and
+/// a port nothing listens on is refused immediately. A machine that cannot
+/// answer quickly here is treated as ended, which costs nothing — it is
+/// still running, and the next start tries again.
+const REATTACH_BUDGET: Duration = Duration::from_millis(1500);
+
+/// How long the repeated check of a reattached machine may take, and how
+/// often it runs.
+///
+/// Short, because it happens while the window is drawing: a monitor that is
+/// there answers in under a millisecond, and a dead port is refused at
+/// once. Only a listener that accepts and then says nothing costs the full
+/// budget, and then only every few seconds.
+const LIVENESS_BUDGET: Duration = Duration::from_millis(250);
+const LIVENESS_EVERY: Duration = Duration::from_secs(5);
+
+/// Confirm that the machine behind a recorded port is the machine claimed.
+///
+/// Two things have to hold: a QMP handshake succeeds (so a QEMU is there at
+/// all), and the machine reports the id it was started with (so it is
+/// *this* machine and not another of ours on a port the operating system
+/// handed out again). A machine from an older version, started before the
+/// identity was stamped on, reports a different UUID and is therefore not
+/// adopted — it keeps running, and the hard stop stays available.
+fn confirm_identity(port: u16, expected: Uuid) -> Result<Greeting, String> {
+    confirm_identity_within(port, expected, REATTACH_BUDGET)
+}
+
+/// `confirm_identity` with the caller's own deadline.
+///
+/// The repeated liveness check wants a short one: it runs while the window
+/// is drawing, and a port nothing listens on is refused at once.
+fn confirm_identity_within(
+    port: u16,
+    expected: Uuid,
+    budget: Duration,
+) -> Result<Greeting, String> {
+    let (mut client, greeting) = connect_tcp(port, budget)?;
+    let reported = client.machine_uuid()?;
+    if reported.eq_ignore_ascii_case(&expected.to_string()) {
+        Ok(greeting)
+    } else {
+        Err(format!(
+            "127.0.0.1:{} answers for {}, not for {}",
+            port, reported, expected
+        ))
+    }
+}
+
+/// Reach a machine's monitor, giving a just-started QEMU time to be there.
+fn connect_qmp(port: u16) -> Result<(QmpClient<TcpStream>, Greeting), String> {
+    let deadline = Instant::now() + QMP_CONNECT_BUDGET;
+    loop {
+        match connect_tcp(port, QMP_CONNECT_BUDGET) {
+            Ok(pair) => return Ok(pair),
+            Err(e) => {
+                if Instant::now() >= deadline {
+                    return Err(e);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 impl Drop for FaroQemApp {
     fn drop(&mut self) {
-        for (_id, (mut proc, _)) in self.running_processes.drain() {
-            let _ = proc.kill();
+        // The guests stay up. Closing the window used to kill every one of
+        // them, which is the opposite of what spec section 7.3 asks for:
+        // a long installation must survive the manager being closed. The
+        // handles are let go of without a `kill`, the run state file keeps
+        // the port and the number, and the next start reattaches.
+        self.running_processes.clear();
+        // The downloads are a different matter: their worker threads die
+        // with this process anyway, and a half-written `.part` is resumable
+        // by design. Asking them to stop is tidier than being torn down
+        // mid-write.
+        for handle in self.downloads.values() {
+            handle
+                .cancel
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         // Results are discarded deliberately: the window is going away, so
         // there is no interface left that could show a notice about a failed

@@ -13,6 +13,7 @@ pub use offers::*;
 
 use egui::{Color32, Stroke};
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 use crate::config::{DriveFormat, VmConfig};
@@ -25,12 +26,33 @@ use crate::ui::theme::{
     COLOR_WARNING, ROUNDING_BUTTON,
 };
 
+/// How long a guest is given before the hard way appears beside the waiting.
+///
+/// Twenty seconds: long enough that a machine shutting down normally never
+/// invites anyone to pull the plug halfway through, short enough that nobody
+/// stands in front of a hung guest with nothing to do (Review Focus 2).
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(20);
+
 /// Actions emitted by the VM detail view toolbar and tabs
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmDetailAction {
     Launch(Uuid),
-    Stop(Uuid),
+    /// Ask the guest to power down. Never kills: spec section 7.1.
+    Shutdown(Uuid),
+    /// Pull the plug. A second, named step the user chooses deliberately,
+    /// offered beside a waiting that has gone on too long or where no
+    /// graceful path exists at all.
+    ForceStop(Uuid),
     Save(Uuid),
+    /// Make a disk image for this machine. The work belongs to the
+    /// application, not to the frame: qemu-img takes seconds to minutes on
+    /// a large image, and the panel would be frozen for all of them.
+    CreateDisk {
+        id: Uuid,
+        path: std::path::PathBuf,
+        format: DriveFormat,
+        size_gb: u32,
+    },
     /// Fetch this machine's installation image, or pick up where an
     /// interrupted transfer left off. Without this, one broken connection
     /// left a machine with a `.part` nothing could resume and a start the
@@ -45,10 +67,12 @@ impl VmDetailAction {
     pub fn vm_id(&self) -> Uuid {
         match self {
             VmDetailAction::Launch(id)
-            | VmDetailAction::Stop(id)
+            | VmDetailAction::Shutdown(id)
+            | VmDetailAction::ForceStop(id)
             | VmDetailAction::Save(id)
             | VmDetailAction::Download(id)
             | VmDetailAction::CancelDownload(id) => *id,
+            VmDetailAction::CreateDisk { id, .. } => *id,
         }
     }
 }
@@ -85,6 +109,10 @@ pub struct CreateDiskState {
     pub format: DriveFormat,
     pub size_gb: u32,
     pub status_msg: Option<Result<String, String>>,
+    /// Whether qemu-img is working on this request right now. The dialog
+    /// stays open and says so, rather than vanishing and leaving the answer
+    /// -- "created", or the reason it failed -- with nobody to read it.
+    pub busy: bool,
 }
 
 impl Default for CreateDiskState {
@@ -95,6 +123,7 @@ impl Default for CreateDiskState {
             format: DriveFormat::Qcow2,
             size_gb: 20,
             status_msg: None,
+            busy: false,
         }
     }
 }
@@ -160,6 +189,12 @@ pub struct VmDetailView<'a> {
     /// Whether this machine has an image worth fetching: a template with a
     /// mirror, and no finished file yet.
     pub can_resume_download: bool,
+    /// Whether a graceful shutdown is possible at all: a QMP channel to this
+    /// guest. `false` by default — a panel that assumed one would offer a
+    /// button whose only possible outcome is an error message.
+    pub qmp_available: bool,
+    /// Since when the guest has been asked to power down, when it has.
+    pub shutting_down_since: Option<SystemTime>,
 }
 
 impl<'a> VmDetailView<'a> {
@@ -189,7 +224,17 @@ impl<'a> VmDetailView<'a> {
             findings: &[],
             download_status: None,
             can_resume_download: false,
+            qmp_available: false,
+            shutting_down_since: None,
         }
+    }
+
+    /// What the stop controls may offer: whether a QMP channel exists, and
+    /// since when this guest has been asked to power down.
+    pub fn with_shutdown(mut self, qmp_available: bool, since: Option<SystemTime>) -> Self {
+        self.qmp_available = qmp_available;
+        self.shutting_down_since = since;
+        self
     }
 
     /// Attach what the installed QEMU can do, so the view offers only that.
@@ -253,6 +298,71 @@ impl<'a> VmDetailView<'a> {
     }
 
     /// Render the complete VM detail view, returning any action triggered
+    /// The stop controls, in the one place both layouts read them from.
+    ///
+    /// Three states, and none of them hides what it does: a running guest is
+    /// asked to power down, a guest already shutting down shows how long it
+    /// has been at it and — once the grace period is up — the hard way
+    /// beside it, and a guest with no QMP channel is told so plainly rather
+    /// than offered a "shutdown" that would kill it.
+    fn stop_controls(
+        &self,
+        ui: &mut egui::Ui,
+        min_size: Option<egui::Vec2>,
+    ) -> Option<VmDetailAction> {
+        let mut action = None;
+        let button = |ui: &mut egui::Ui, label: String, fill: Color32, enabled: bool| -> bool {
+            let mut btn =
+                egui::Button::new(egui::RichText::new(label).strong().color(Color32::WHITE))
+                    .fill(fill);
+            if let Some(size) = min_size {
+                btn = btn.min_size(size);
+            }
+            ui.add_enabled(enabled, btn).clicked()
+        };
+        let force_label = format!("{} {}", icons::STOP, self.i18n.t("force_stop"));
+        let shutdown_label = format!("{} {}", icons::STOP, self.i18n.t("shutdown"));
+
+        if let Some(since) = self.shutting_down_since {
+            // A guest that never finishes must not leave the user staring at
+            // a spinner with no way out.
+            let waited = since.elapsed().unwrap_or_default();
+            ui.label(
+                egui::RichText::new(self.i18n.t("shutting_down"))
+                    .color(COLOR_WARNING)
+                    .size(12.0),
+            );
+            ui.label(
+                egui::RichText::new(self.i18n.tf(
+                    "shutdown_elapsed",
+                    &[("seconds", &waited.as_secs().to_string())],
+                ))
+                .size(11.0)
+                .color(ui.visuals().weak_text_color()),
+            );
+            if waited >= SHUTDOWN_GRACE && button(ui, force_label, COLOR_ERROR, true) {
+                action = Some(VmDetailAction::ForceStop(self.vm.id));
+            }
+        } else if self.is_running && self.qmp_available {
+            if button(ui, shutdown_label, COLOR_WARNING, true) {
+                action = Some(VmDetailAction::Shutdown(self.vm.id));
+            }
+        } else if self.is_running {
+            ui.label(
+                egui::RichText::new(self.i18n.t("shutdown_unavailable"))
+                    .color(COLOR_WARNING)
+                    .size(11.0),
+            );
+            if button(ui, force_label, COLOR_ERROR, true) {
+                action = Some(VmDetailAction::ForceStop(self.vm.id));
+            }
+        } else {
+            // Nothing is running: the control keeps its place, greyed out.
+            let _ = button(ui, shutdown_label, COLOR_STOPPED, false);
+        }
+        action
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<VmDetailAction> {
         let mut action: Option<VmDetailAction> = None;
 
@@ -334,19 +444,9 @@ impl<'a> VmDetailView<'a> {
                         action = Some(VmDetailAction::Launch(self.vm.id));
                     }
 
-                    // [⏹ Force Stop]
-                    let stop_btn = egui::Button::new(
-                        egui::RichText::new(format!("{} {}", icons::STOP, self.i18n.t("stop")))
-                            .strong()
-                            .color(Color32::WHITE),
-                    )
-                    .fill(if self.is_running {
-                        COLOR_ERROR
-                    } else {
-                        COLOR_STOPPED
-                    });
-                    if ui.add_enabled(self.is_running, stop_btn).clicked() {
-                        action = Some(VmDetailAction::Stop(self.vm.id));
+                    // [⏹ Shut Down] / the waiting state / [⏹ Force Stop]
+                    if let Some(a) = self.stop_controls(ui, None) {
+                        action = Some(a);
                     }
 
                     // [💾 Save]
@@ -378,8 +478,10 @@ impl<'a> VmDetailView<'a> {
                             .desired_width(220.0),
                     );
 
-                    // Running / Stopped Status Badge
-                    if self.is_running {
+                    // Running / Shutting down / Stopped Status Badge
+                    if self.shutting_down_since.is_some() {
+                        status_badge(ui, self.i18n.t("status_shutting_down"), COLOR_WARNING);
+                    } else if self.is_running {
                         let status_text = if let Some(pid) = self.pid {
                             self.i18n
                                 .tf("badge_running_pid", &[("pid", &pid.to_string())])
@@ -404,20 +506,9 @@ impl<'a> VmDetailView<'a> {
                             action = Some(VmDetailAction::Save(self.vm.id));
                         }
 
-                        // 2. [⏹ Force Stop] (middle)
-                        let stop_btn = egui::Button::new(
-                            egui::RichText::new(format!("{} {}", icons::STOP, self.i18n.t("stop")))
-                                .strong()
-                                .color(Color32::WHITE),
-                        )
-                        .fill(if self.is_running {
-                            COLOR_ERROR
-                        } else {
-                            COLOR_STOPPED
-                        })
-                        .min_size(egui::vec2(80.0, 28.0));
-                        if ui.add_enabled(self.is_running, stop_btn).clicked() {
-                            action = Some(VmDetailAction::Stop(self.vm.id));
+                        // 2. [⏹ Shut Down] / the waiting state (middle)
+                        if let Some(a) = self.stop_controls(ui, Some(egui::vec2(80.0, 28.0))) {
+                            action = Some(a);
                         }
 
                         // 3. [▶ Launch VM] (leftmost of actions)
@@ -587,7 +678,9 @@ impl<'a> VmDetailView<'a> {
             });
 
         // 4. Modal Dialog: Create New Disk Image
-        self.show_create_disk_modal(ui.ctx());
+        if let Some(a) = self.show_create_disk_modal(ui.ctx()) {
+            action = Some(a);
+        }
 
         action
     }
