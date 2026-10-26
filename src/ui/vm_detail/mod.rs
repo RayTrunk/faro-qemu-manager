@@ -22,8 +22,8 @@ use crate::preflight::{Finding, Severity};
 use crate::qemu::QemuCapabilities;
 use crate::ui::console::{ConsoleLogBuffer, ConsoleView};
 use crate::ui::theme::{
-    card_frame, icons, status_badge, COLOR_ERROR, COLOR_PRIMARY, COLOR_RUNNING, COLOR_STOPPED,
-    COLOR_WARNING, ROUNDING_BUTTON,
+    card_frame, icons, status_badge, COLOR_ERROR, COLOR_PRIMARY, COLOR_PRIMARY_DEEP, COLOR_RUNNING,
+    COLOR_STOPPED, COLOR_WARNING, ROUNDING_BUTTON,
 };
 
 /// The same colour, quieter.
@@ -443,8 +443,12 @@ impl<'a> VmDetailView<'a> {
                             .strong()
                             .color(Color32::WHITE),
                     )
+                    // The one filled surface in the window. Green means a
+                    // machine is running, so it cannot also mean "press
+                    // this to start one"; blue is the colour of the action,
+                    // and the deep tone is the one white text can be read on.
                     .fill(if !self.is_running {
-                        COLOR_RUNNING
+                        COLOR_PRIMARY_DEEP
                     } else {
                         COLOR_STOPPED
                     });
@@ -498,9 +502,11 @@ impl<'a> VmDetailView<'a> {
                             self.i18n.t("badge_running").to_string()
                         };
                         status_badge(ui, &status_text, COLOR_RUNNING);
-                    } else {
-                        status_badge(ui, "STOPPED", COLOR_STOPPED);
                     }
+                    // Nothing for a machine that is simply off. The badge
+                    // said "STOPPED" -- untranslated, and alongside the
+                    // same word in every row of the list. A mark that is
+                    // always there marks nothing.
 
                     // Wrapping, not overflowing. Right-aligned groups that
                     // do not fit used to be laid out past the right edge of
@@ -542,8 +548,10 @@ impl<'a> VmDetailView<'a> {
                             .strong()
                             .color(Color32::WHITE),
                         )
+                        // Same button, narrow layout. Blue, like the other
+                        // branch: green means "this is running".
                         .fill(if !self.is_running {
-                            COLOR_RUNNING
+                            COLOR_PRIMARY_DEEP
                         } else {
                             COLOR_STOPPED
                         })
@@ -555,94 +563,98 @@ impl<'a> VmDetailView<'a> {
                 });
             }
 
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(6.0);
-
-            // Row 2: Swiss 4-Column Mathematical Metric Folio Header
-            // [ ARCHITECTURE ] | [ PROCESSING ] | [ MEMORY ] | [ ACCELERATOR ]
-            ui.horizontal(|ui| {
-                let col_width = ((ui.available_width() - 3.0 * 16.0) / 4.0).max(80.0);
-
-                // Col 1: Architecture
-                ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(self.i18n.t("card_architecture"))
-                                .size(10.0)
-                                .color(ui.visuals().weak_text_color())
-                                .strong(),
-                        );
-                        ui.label(
-                            egui::RichText::new(self.vm.arch.as_str())
-                                .size(13.0)
-                                .monospace()
-                                .strong(),
-                        );
-                    });
-                });
-
+            // Row 2: the machine's headline figures -- but only where they
+            // are not already on screen. In the System tab these four sat
+            // directly above the very fields that hold them, which is a
+            // summary of something you are already looking at. In Storage,
+            // Display, Network and Console nothing else shows them.
+            if *self.active_tab != DetailTab::System {
+                ui.add_space(8.0);
                 ui.separator();
+                ui.add_space(6.0);
 
-                // Col 2: Processing
-                ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(self.i18n.t("card_processing"))
-                                .size(10.0)
-                                .color(ui.visuals().weak_text_color())
-                                .strong(),
-                        );
-                        let cpu_str = if self.vm.cpu_cores == 1 {
-                            "1 vCPU".to_string()
-                        } else {
-                            format!("{} vCPUs", self.vm.cpu_cores)
-                        };
-                        ui.label(egui::RichText::new(cpu_str).size(13.0).monospace().strong());
+                ui.horizontal(|ui| {
+                    let col_width = ((ui.available_width() - 3.0 * 16.0) / 4.0).max(80.0);
+
+                    // Col 1: Architecture
+                    ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("card_architecture"))
+                                    .size(10.0)
+                                    .color(ui.visuals().weak_text_color())
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new(self.vm.arch.as_str())
+                                    .size(13.0)
+                                    .monospace()
+                                    .strong(),
+                            );
+                        });
+                    });
+
+                    ui.separator();
+
+                    // Col 2: Processing
+                    ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("card_processing"))
+                                    .size(10.0)
+                                    .color(ui.visuals().weak_text_color())
+                                    .strong(),
+                            );
+                            let cpu_str = if self.vm.cpu_cores == 1 {
+                                "1 vCPU".to_string()
+                            } else {
+                                format!("{} vCPUs", self.vm.cpu_cores)
+                            };
+                            ui.label(egui::RichText::new(cpu_str).size(13.0).monospace().strong());
+                        });
+                    });
+
+                    ui.separator();
+
+                    // Col 3: Memory
+                    ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("card_memory"))
+                                    .size(10.0)
+                                    .color(ui.visuals().weak_text_color())
+                                    .strong(),
+                            );
+                            let mem_str = format!(
+                                "{} MB ({:.1} GB)",
+                                self.vm.memory_mb,
+                                self.vm.memory_mb as f64 / 1024.0
+                            );
+                            ui.label(egui::RichText::new(mem_str).size(13.0).monospace().strong());
+                        });
+                    });
+
+                    ui.separator();
+
+                    // Col 4: Accelerator
+                    ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("card_accelerator"))
+                                    .size(10.0)
+                                    .color(ui.visuals().weak_text_color())
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new(self.vm.accel.as_str())
+                                    .size(13.0)
+                                    .monospace()
+                                    .strong(),
+                            );
+                        });
                     });
                 });
-
-                ui.separator();
-
-                // Col 3: Memory
-                ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(self.i18n.t("card_memory"))
-                                .size(10.0)
-                                .color(ui.visuals().weak_text_color())
-                                .strong(),
-                        );
-                        let mem_str = format!(
-                            "{} MB ({:.1} GB)",
-                            self.vm.memory_mb,
-                            self.vm.memory_mb as f64 / 1024.0
-                        );
-                        ui.label(egui::RichText::new(mem_str).size(13.0).monospace().strong());
-                    });
-                });
-
-                ui.separator();
-
-                // Col 4: Accelerator
-                ui.allocate_ui(egui::vec2(col_width, 36.0), |ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(self.i18n.t("card_accelerator"))
-                                .size(10.0)
-                                .color(ui.visuals().weak_text_color())
-                                .strong(),
-                        );
-                        ui.label(
-                            egui::RichText::new(self.vm.accel.as_str().to_uppercase())
-                                .size(13.0)
-                                .monospace()
-                                .strong()
-                                .color(COLOR_PRIMARY),
-                        );
-                    });
-                });
-            });
+            }
         });
 
         ui.add_space(8.0);
@@ -673,8 +685,8 @@ impl<'a> VmDetailView<'a> {
                 // screen, and two things shouting is one thing too many.
                 let btn = if is_selected {
                     egui::Button::new(egui::RichText::new(text).strong().color(COLOR_PRIMARY))
-                        .fill(tinted(COLOR_PRIMARY, 46))
-                        .stroke(Stroke::new(1.0, tinted(COLOR_PRIMARY, 150)))
+                        .fill(tinted(COLOR_PRIMARY, 28))
+                        .stroke(Stroke::new(1.0, tinted(COLOR_PRIMARY, 110)))
                         .min_size(egui::vec2(95.0, 28.0))
                 } else {
                     egui::Button::new(egui::RichText::new(text).color(ui.visuals().text_color()))

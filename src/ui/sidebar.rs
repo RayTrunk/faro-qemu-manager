@@ -11,7 +11,7 @@ use crate::i18n::I18n;
 use crate::ui::theme::{
     card_frame, danger_button, icons, status_badge, status_badge_interactive, COLOR_ACCENT,
     COLOR_DARK_SURFACE_HOVER, COLOR_ERROR, COLOR_LIGHT_SURFACE_HOVER, COLOR_PRIMARY, COLOR_RUNNING,
-    COLOR_STOPPED, COLOR_WARNING, ROUNDING_BADGE,
+    COLOR_WARNING, ROUNDING_BADGE,
 };
 
 /// Actions emitted by the sidebar navigation and toolbar
@@ -196,12 +196,16 @@ impl<'a> SidebarView<'a> {
 
         // 3. VM Actions Toolbar (Positioned at TOP so it is ALWAYS visible and never overflows the window)
         // Primary Action: [+ New VM]
+        // Outlined, not filled. Making a machine is the start of the work,
+        // not the point of it -- the one filled surface on screen belongs to
+        // starting a machine. Three solid colours competing taught nobody
+        // which mattered.
         let new_btn = egui::Button::new(
             egui::RichText::new(format!("{} {}", icons::ADD, self.i18n.t("new_vm")))
-                .strong()
-                .color(Color32::WHITE),
+                .color(COLOR_PRIMARY),
         )
-        .fill(COLOR_PRIMARY)
+        .fill(Color32::TRANSPARENT)
+        .stroke(Stroke::new(1.0, COLOR_PRIMARY))
         .min_size(egui::vec2(ui.available_width(), 28.0));
         if ui.add(new_btn).clicked() {
             action = Some(SidebarAction::NewVm);
@@ -238,11 +242,11 @@ impl<'a> SidebarView<'a> {
                     },
                 ),
             )
-            .fill(if can_del {
-                COLOR_ERROR.linear_multiply(0.12)
-            } else {
-                Color32::TRANSPARENT
-            })
+            // No fill: deleting is the rarest thing anyone does here and the
+            // only one that cannot be undone, so it must not own the loudest
+            // surface in the sidebar. The red stays in the text, and in the
+            // confirmation that follows -- a warning, not an invitation.
+            .fill(Color32::TRANSPARENT)
             .min_size(egui::vec2(cols[1].available_width(), 26.0));
 
             if cols[1].add_enabled(can_del, del_btn).clicked() {
@@ -355,13 +359,15 @@ impl<'a> SidebarView<'a> {
                                                             COLOR_WARNING,
                                                         );
                                                     }
-                                                    VmStatus::Stopped => {
-                                                        status_badge(
-                                                            ui,
-                                                            self.i18n.t("status_stopped"),
-                                                            COLOR_STOPPED,
-                                                        );
-                                                    }
+                                                    // Off is the resting
+                                                    // state and wears no
+                                                    // badge: three idle
+                                                    // machines used to
+                                                    // carry three identical
+                                                    // "Stopped" marks, which
+                                                    // told them apart from
+                                                    // nothing.
+                                                    VmStatus::Stopped => {}
                                                     VmStatus::Error(err) => {
                                                         let badge_resp = status_badge_interactive(
                                                             ui,
