@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::config::{Accelerator, Arch, Firmware};
 use crate::qemu::nvram_path_for;
-use crate::ui::theme::{card_frame, icons, COLOR_ERROR, COLOR_PRIMARY, COLOR_WARNING};
+use crate::ui::theme::{card_frame, icons, COLOR_ERROR, COLOR_WARNING};
 
 use super::offers::*;
 use super::VmDetailView;
@@ -15,6 +15,11 @@ use super::VmDetailView;
 impl<'a> VmDetailView<'a> {
     /// Tab 1: System & Hardware
     pub(super) fn show_system_tab(&mut self, ui: &mut egui::Ui) {
+        // Every value sits in a column of this width, so the figures line
+        // up under one another instead of each field being as wide as its
+        // own content happened to be.
+        const VALUE_WIDTH: f32 = 150.0;
+
         ui.heading(self.i18n.t("tab_system"));
         ui.add_space(6.0);
 
@@ -27,6 +32,7 @@ impl<'a> VmDetailView<'a> {
                     ui.label(egui::RichText::new(self.i18n.t("arch")).strong());
                     let old_arch = self.vm.arch;
                     egui::ComboBox::from_id_salt("detail_arch_combo")
+                        .width(VALUE_WIDTH)
                         .selected_text(self.vm.arch.as_str())
                         .show_ui(ui, |ui| {
                             for a in Arch::all() {
@@ -53,10 +59,15 @@ impl<'a> VmDetailView<'a> {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.vm.machine_type)
                                 .hint_text(self.vm.arch.default_machine())
-                                .desired_width(140.0),
+                                .desired_width(VALUE_WIDTH),
                         );
+                        // A suggestion that is already the value suggests
+                        // nothing: "q35" sat next to a field reading q35.
                         let suggestions = offered_machine_types(self.vm.arch, self.capabilities);
                         for machine in suggestions {
+                            if machine == self.vm.machine_type {
+                                continue;
+                            }
                             if ui.small_button(machine).clicked() {
                                 self.vm.machine_type = machine.to_string();
                             }
@@ -77,6 +88,7 @@ impl<'a> VmDetailView<'a> {
                     ui.label(egui::RichText::new(self.i18n.t("accel")).strong());
                     ui.horizontal(|ui| {
                         egui::ComboBox::from_id_salt("detail_accel_combo")
+                            .width(VALUE_WIDTH)
                             .selected_text(self.vm.accel.as_str().to_uppercase())
                             .show_ui(ui, |ui| {
                                 for acc in offered_accelerators() {
@@ -125,7 +137,7 @@ impl<'a> VmDetailView<'a> {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.vm.cpu_model)
                                 .hint_text(self.vm.arch.default_cpu())
-                                .desired_width(140.0),
+                                .desired_width(VALUE_WIDTH),
                         );
                         let cpu_suggestions: &[&str] = match self.vm.arch {
                             Arch::X86_64 | Arch::I386 => &["host", "max", "qemu64"],
@@ -134,6 +146,9 @@ impl<'a> VmDetailView<'a> {
                             Arch::Riscv64 => &["rv64", "max"],
                         };
                         for &c in cpu_suggestions {
+                            if c == self.vm.cpu_model {
+                                continue;
+                            }
                             if ui.small_button(c).clicked() {
                                 self.vm.cpu_model = c.to_string();
                             }
@@ -141,52 +156,38 @@ impl<'a> VmDetailView<'a> {
                     });
                     ui.end_row();
 
-                    // 5. CPU Cores Slider
+                    // 5. CPU cores. One control: type into it, or drag it.
+                    // A slider, a field and a row of presets used to offer
+                    // the same value three ways, with the label repeated
+                    // inside the row -- and nothing said which one counted.
+                    // The bounds move to a quiet note, which is the only
+                    // thing the slider told you that a field cannot.
                     ui.label(egui::RichText::new(self.i18n.t("cores")).strong());
                     ui.horizontal(|ui| {
-                        ui.add(
-                            egui::Slider::new(&mut self.vm.cpu_cores, 1..=32)
-                                .text(self.i18n.t("cores")),
+                        ui.add_sized(
+                            [VALUE_WIDTH, 20.0],
+                            egui::DragValue::new(&mut self.vm.cpu_cores)
+                                .range(1..=32)
+                                .speed(0.05),
                         );
-                        for &c in &[1, 2, 4, 8, 16] {
-                            if ui.small_button(format!("{}", c)).clicked() {
-                                self.vm.cpu_cores = c;
-                            }
-                        }
+                        ui.label(range_note(ui, "1-32"));
                     });
                     ui.end_row();
 
-                    // 6. Memory Allocation
+                    // 6. Memory, the same way. Dragging moves in coarse
+                    // steps because nobody picks 8191 MB on purpose; typing
+                    // still takes any value QEMU accepts.
                     ui.label(egui::RichText::new(self.i18n.t("memory_mb")).strong());
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::Slider::new(&mut self.vm.memory_mb, 128..=65536)
-                                    .text("MB")
-                                    .step_by(128.0),
-                            );
-                            let gb = self.vm.memory_mb as f64 / 1024.0;
-                            ui.label(
-                                egui::RichText::new(format!("({:.2} GB)", gb))
-                                    .color(COLOR_PRIMARY)
-                                    .strong(),
-                            );
-                        });
-                        ui.horizontal(|ui| {
-                            let presets: &[(u32, &str)] = &[
-                                (1024, "1 GB"),
-                                (2048, "2 GB"),
-                                (4096, "4 GB"),
-                                (8192, "8 GB"),
-                                (16384, "16 GB"),
-                                (32768, "32 GB"),
-                            ];
-                            for &(mb, label) in presets {
-                                if ui.small_button(label).clicked() {
-                                    self.vm.memory_mb = mb;
-                                }
-                            }
-                        });
+                    ui.horizontal(|ui| {
+                        ui.add_sized(
+                            [VALUE_WIDTH, 20.0],
+                            egui::DragValue::new(&mut self.vm.memory_mb)
+                                .range(128..=65536)
+                                .speed(16.0)
+                                .suffix(" MB"),
+                        );
+                        let gb = self.vm.memory_mb as f64 / 1024.0;
+                        ui.label(range_note(ui, &format!("{gb:.2} GB  ·  128 MB-64 GB")));
                     });
                     ui.end_row();
 
@@ -284,4 +285,15 @@ impl<'a> VmDetailView<'a> {
                 });
         });
     }
+}
+
+/// A quiet note beside a value: the bounds it accepts, or the same number
+/// in a unit people actually think in.
+///
+/// Deliberately weak and small. It is there to be read once, when someone
+/// wonders what the field will take -- not to compete with the value.
+fn range_note(ui: &egui::Ui, text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .size(11.0)
+        .color(ui.visuals().weak_text_color())
 }

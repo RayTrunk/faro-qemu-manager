@@ -10,32 +10,56 @@ use egui::{
 // Status and Theme Color Palette
 // ---------------------------------------------------------------------------
 
-/// Emerald green for actively running virtual machines (#10B981)
+// One colour, one meaning. Green says a machine is running, amber says
+// something wants a second look, red says something failed or cannot be
+// undone, and blue belongs to the action you came here to take. Nothing
+// else is coloured, so that these four always mean something.
+//
+// Every one is measured against the background it is written on: WCAG asks
+// 4.5:1 for text, and the blue this project began with managed 1.79:1 --
+// present in the file, invisible on the screen.
+
+/// Emerald green: this machine is running (#10B981)
 pub const COLOR_RUNNING: Color32 = Color32::from_rgb(16, 185, 129);
 
-/// Neutral slate / zinc gray for powered-off / stopped virtual machines (#71717A)
-pub const COLOR_STOPPED: Color32 = Color32::from_rgb(113, 113, 122);
+/// Quiet grey for a machine that is simply off (#8A8D96).
+/// Lighter than the old #71717A, which sat at 3.1:1 -- legible in theory.
+pub const COLOR_STOPPED: Color32 = Color32::from_rgb(138, 141, 150);
 
-/// Swiss crimson red for error states or dangerous actions (#E11D48)
-pub const COLOR_ERROR: Color32 = Color32::from_rgb(225, 29, 72);
+/// Rose red: something failed, or cannot be undone (#F43F5E)
+pub const COLOR_ERROR: Color32 = Color32::from_rgb(244, 63, 94);
 
-/// Primary Yves Klein Blue for active widgets, primary actions, and focus rings (#002FA7)
-pub const COLOR_PRIMARY: Color32 = Color32::from_rgb(0, 47, 167);
+/// The blue of the mark itself: the one action, and nothing else (#3884FF).
+/// The deep Klein blue it replaces was unreadable as text and heavy as a
+/// fill -- the whole screen had to be near-black for it to show at all.
+pub const COLOR_PRIMARY: Color32 = Color32::from_rgb(56, 132, 255);
 
-/// Hover tint for primary Klein Blue widgets (#1A44BD)
-pub const COLOR_PRIMARY_HOVER: Color32 = Color32::from_rgb(26, 68, 189);
+/// A touch brighter under the pointer (#5C9BFF)
+pub const COLOR_PRIMARY_HOVER: Color32 = Color32::from_rgb(92, 155, 255);
 
-/// Violet / Indigo accent for special highlights and VM tags (#6366F1)
-pub const COLOR_ACCENT: Color32 = Color32::from_rgb(99, 102, 241);
+/// Deep blue, used only as a fill with white text on it (#1D4ED8).
+/// White on this is comfortably readable; on the lighter primary it is not.
+pub const COLOR_PRIMARY_DEEP: Color32 = Color32::from_rgb(29, 78, 216);
 
-/// Swiss amber warning (#F59E0B)
+/// Violet / Indigo accent for special highlights and VM tags (#818CF8)
+pub const COLOR_ACCENT: Color32 = Color32::from_rgb(129, 140, 248);
+
+/// Amber: worth a second look before continuing (#F59E0B)
 pub const COLOR_WARNING: Color32 = Color32::from_rgb(245, 158, 11);
 
-// Dark theme surface colors (Swiss High-Modernist Dark)
-pub const COLOR_DARK_BG: Color32 = Color32::from_rgb(14, 15, 18);
-pub const COLOR_DARK_SURFACE: Color32 = Color32::from_rgb(22, 23, 27);
-pub const COLOR_DARK_SURFACE_HOVER: Color32 = Color32::from_rgb(32, 34, 40);
-pub const COLOR_DARK_BORDER: Color32 = Color32::from_rgb(44, 46, 53);
+// Dark theme surfaces, lifted out of near-black. #0E0F12 read as a hole in
+// the screen, and anything that had to be visible against it was forced to
+// shout. Three gentle steps now: panel, card, border.
+pub const COLOR_DARK_BG: Color32 = Color32::from_rgb(23, 25, 30);
+pub const COLOR_DARK_SURFACE: Color32 = Color32::from_rgb(31, 34, 40);
+pub const COLOR_DARK_SURFACE_HOVER: Color32 = Color32::from_rgb(42, 46, 54);
+pub const COLOR_DARK_BORDER: Color32 = Color32::from_rgb(55, 60, 70);
+
+/// Sunk below the panel: the console's terminal, the command line under it.
+/// Darker than the background on purpose -- a surface you read *into*
+/// rather than one that sits on top -- but no longer the near-black the
+/// rest of the interface used to be, which left it indistinguishable.
+pub const COLOR_DARK_SUNKEN: Color32 = Color32::from_rgb(16, 18, 23);
 
 // Light theme surface colors (Swiss High-Modernist Light)
 pub const COLOR_LIGHT_BG: Color32 = Color32::from_rgb(247, 247, 248);
@@ -93,7 +117,11 @@ pub mod icons {
 /// Also configures clear typographic hierarchy (Heading: 20pt, Body: 14pt,
 /// Button: 14pt, Monospace: 13pt, Small: 11pt).
 pub fn configure_modern_fonts(ctx: &Context) {
-    // Apply clean typographic scales and layout spacing using egui built-in fonts
+    // The typefaces themselves, before the scale that sizes them. Called
+    // once at startup -- rebuilding the glyph atlas is not frame work.
+    ctx.set_fonts(font_definitions());
+
+    // Apply clean typographic scales and layout spacing
     ctx.style_mut(|style| {
         style.text_styles = [
             (
@@ -136,6 +164,51 @@ pub fn configure_modern_fonts(ctx: &Context) {
 /// Apply the specified theme (`"dark"` or `"light"`) with modern frame styling,
 /// 6.0px widget corner roundings, 8.0px window roundings, clean margins, and
 /// cohesive text contrast.
+/// The typefaces the program carries with it.
+///
+/// IBM Plex rather than the toolkit's default: it was drawn for technical
+/// products, its figures are tabular -- 8192 and 2048 line up in a column,
+/// which is the whole point of a machine's data sheet -- and the SIL Open
+/// Font Licence travels with a GPL build. Three cuts and no more: regular
+/// for text, semibold for the few places that carry weight, mono for every
+/// value you might compare against another.
+///
+/// The toolkit's own fonts stay in the list behind ours, so the emoji used
+/// as icons still resolve instead of leaving empty boxes.
+pub fn font_definitions() -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+
+    fonts.font_data.insert(
+        "plex_sans".to_owned(),
+        egui::FontData::from_static(include_bytes!("../../assets/fonts/IBMPlexSans-Regular.ttf")),
+    );
+    fonts.font_data.insert(
+        "plex_sans_semibold".to_owned(),
+        egui::FontData::from_static(include_bytes!(
+            "../../assets/fonts/IBMPlexSans-SemiBold.ttf"
+        )),
+    );
+    fonts.font_data.insert(
+        "plex_mono".to_owned(),
+        egui::FontData::from_static(include_bytes!("../../assets/fonts/IBMPlexMono-Regular.ttf")),
+    );
+
+    if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
+        family.insert(0, "plex_sans".to_owned());
+    }
+    if let Some(family) = fonts.families.get_mut(&FontFamily::Monospace) {
+        family.insert(0, "plex_mono".to_owned());
+    }
+    // A named family for the few headings that carry weight, so a caller
+    // asks for the cut by name instead of leaning on fake bold.
+    fonts.families.insert(
+        FontFamily::Name("plex_semibold".into()),
+        vec!["plex_sans_semibold".to_owned(), "plex_sans".to_owned()],
+    );
+
+    fonts
+}
+
 pub fn apply_theme(ctx: &Context, theme: &str) {
     let is_light = theme.eq_ignore_ascii_case("light");
 
@@ -202,9 +275,17 @@ fn create_dark_visuals() -> Visuals {
     visuals.widgets.open.rounding = Rounding::same(ROUNDING_BUTTON);
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
-    // Text selection: Yves Klein Blue tint
-    visuals.selection.bg_fill = Color32::from_rgb(0, 47, 167);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(60, 120, 255));
+    // What is selected -- a chosen toggle, highlighted text -- is tinted,
+    // not painted. A solid accent behind every selectable_label put three
+    // or four saturated blocks on screen at once, each as loud as the one
+    // action that matters.
+    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(
+        COLOR_PRIMARY.r(),
+        COLOR_PRIMARY.g(),
+        COLOR_PRIMARY.b(),
+        60,
+    );
+    visuals.selection.stroke = Stroke::new(1.0, COLOR_PRIMARY);
 
     visuals
 }
@@ -295,9 +376,11 @@ pub fn status_badge_interactive(ui: &mut Ui, text: &str, color: Color32) -> Resp
     let font_id = FontId::new(11.0, FontFamily::Proportional);
     let text_color = badge_text_color(color);
 
+    // The caller's own words, as written. Shouting them in capitals made
+    // every badge look like a warning, and cost the ones that are.
     let galley = ui
         .painter()
-        .layout_no_wrap(text.to_uppercase(), font_id, text_color);
+        .layout_no_wrap(text.to_owned(), font_id, text_color);
     let size = galley.size() + PADDING_BADGE * 2.0;
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
 

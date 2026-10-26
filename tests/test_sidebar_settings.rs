@@ -581,3 +581,65 @@ fn test_the_settings_dialog_names_the_version_it_is_running() {
         drawn
     );
 }
+
+/// A badge earns its place by marking something out of the ordinary.
+///
+/// With three machines sitting idle, "Stopped" appeared three times in the
+/// list and once more in the header: four labels saying the usual thing,
+/// and nothing at all distinguishing them. Off is the resting state -- the
+/// list says it by *not* marking the entry.
+#[test]
+fn test_the_ordinary_state_wears_no_badge() {
+    let i18n = I18n::new("en");
+
+    let idle = rendered_sidebar(VmStatus::Stopped, &i18n);
+    assert!(
+        !idle.contains(i18n.t("status_stopped")),
+        "an idle machine is still badged as stopped:\n{idle}"
+    );
+
+    // Everything that is *not* the resting state still speaks up. A running
+    // machine is badged with the play mark and its process id, which says
+    // more than the word "running" would.
+    let busy = rendered_sidebar(VmStatus::Running { pid: 4242 }, &i18n);
+    assert!(
+        busy.contains("4242"),
+        "a running machine must be marked as such:\n{busy}"
+    );
+    let broken = rendered_sidebar(VmStatus::Error("boom".into()), &i18n);
+    assert!(
+        broken.contains(i18n.t("status_error")),
+        "a failed machine must be marked as such:\n{broken}"
+    );
+}
+
+/// Everything the sidebar draws for a single machine in a given state.
+fn rendered_sidebar(status: VmStatus, i18n: &I18n) -> String {
+    let vm = VmConfig::new_default("probe", Arch::X86_64);
+    let vms = vec![vm.clone()];
+    let mut statuses = HashMap::new();
+    statuses.insert(vm.id, status);
+    let mut search = String::new();
+    let ctx = Context::default();
+    // A screen to draw on: with the default zero-sized one the list never
+    // gets laid out at all, and the capture holds nothing but the search box.
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1120.0, 720.0),
+        )),
+        ..Default::default()
+    };
+    let mut draw = || {
+        ctx.run(input(), |ctx| {
+            egui::SidePanel::left("sidebar_panel")
+                .default_width(280.0)
+                .show(ctx, |ui| {
+                    let _ =
+                        SidebarView::new(&vms, Some(vm.id), &mut search, &statuses, i18n).show(ui);
+                });
+        })
+    };
+    let _ = draw();
+    common::rendered_text(&draw())
+}

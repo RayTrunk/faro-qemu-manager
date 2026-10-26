@@ -7,8 +7,8 @@ use std::time::SystemTime;
 use crate::i18n::I18n;
 use crate::qemu::QemuEvent;
 use crate::ui::theme::{
-    icons, status_badge, COLOR_DARK_BORDER, COLOR_ERROR, COLOR_RUNNING, COLOR_STOPPED,
-    ROUNDING_BUTTON,
+    icons, status_badge, COLOR_DARK_BORDER, COLOR_DARK_SUNKEN, COLOR_ERROR, COLOR_RUNNING,
+    COLOR_STOPPED, COLOR_WARNING, ROUNDING_BUTTON,
 };
 
 /// Log level categorization for virtual machine console entries
@@ -35,9 +35,9 @@ impl LogLevel {
     pub fn color(&self) -> Color32 {
         match self {
             LogLevel::Stdout => Color32::from_rgb(220, 224, 230), // Neutral soft light-gray / white
-            LogLevel::Stderr => Color32::from_rgb(245, 158, 11),  // Amber / warning orange
-            LogLevel::System => Color32::from_rgb(56, 189, 248),  // Sky cyan / blue
-            LogLevel::Error => COLOR_ERROR,                       // Crimson red
+            LogLevel::Stderr => COLOR_WARNING,
+            LogLevel::System => Color32::from_rgb(56, 189, 248), // Sky cyan / blue
+            LogLevel::Error => COLOR_ERROR,                      // Crimson red
         }
     }
 
@@ -528,7 +528,7 @@ impl<'a> ConsoleView<'a> {
 
                     ui.add_space(2.0);
                     let cmd_frame = Frame::none()
-                        .fill(Color32::from_rgb(15, 17, 21))
+                        .fill(COLOR_DARK_SUNKEN)
                         .stroke(Stroke::new(1.0, COLOR_DARK_BORDER))
                         .rounding(Rounding::same(ROUNDING_BUTTON))
                         .inner_margin(Margin::same(8.0));
@@ -551,7 +551,7 @@ impl<'a> ConsoleView<'a> {
 
         // --- Terminal Console Frame ---
         ui.add_space(6.0);
-        let terminal_bg = Color32::from_rgb(10, 11, 14);
+        let terminal_bg = COLOR_DARK_SUNKEN;
         let terminal_frame = Frame::none()
             .fill(terminal_bg)
             .stroke(Stroke::new(1.0, COLOR_DARK_BORDER))
@@ -598,7 +598,7 @@ impl<'a> ConsoleView<'a> {
                         )
                         .monospace()
                         .size(12.0)
-                        .color(Color32::from_rgb(120, 125, 135)),
+                        .color(COLOR_STOPPED),
                     );
                 } else if self.logs.is_empty() {
                     ui.add_space(30.0);
@@ -607,7 +607,7 @@ impl<'a> ConsoleView<'a> {
                             egui::RichText::new(self.i18n.t("console_empty"))
                                 .monospace()
                                 .size(12.0)
-                                .color(Color32::from_rgb(120, 125, 135)),
+                                .color(COLOR_STOPPED),
                         );
                         ui.add_space(4.0);
                         if self.is_running {
@@ -622,7 +622,7 @@ impl<'a> ConsoleView<'a> {
                                 egui::RichText::new(self.i18n.t("console_stopped_hint"))
                                     .monospace()
                                     .size(11.0)
-                                    .color(Color32::from_rgb(90, 95, 105)),
+                                    .color(COLOR_STOPPED),
                             );
                         }
                     });
@@ -638,7 +638,7 @@ impl<'a> ConsoleView<'a> {
                                     egui::RichText::new(&entry.timestamp)
                                         .monospace()
                                         .size(11.0)
-                                        .color(Color32::from_rgb(110, 115, 128)),
+                                        .color(COLOR_STOPPED),
                                 );
                             }
 

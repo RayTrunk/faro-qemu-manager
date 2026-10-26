@@ -882,3 +882,154 @@ fn test_the_panel_stays_inside_the_window() {
         }
     }
 }
+
+/// One way to set a number, not three.
+///
+/// The System tab used to offer a slider, a text field and a row of preset
+/// buttons for the same value, with the label repeated inside the row. The
+/// person reading it could not tell which one counted. Now there is a drag
+/// field -- type into it or drag it -- and the permitted range written out
+/// beside it, so the slider's one virtue (showing the bounds) survives.
+#[test]
+fn test_a_number_is_set_in_exactly_one_place() {
+    let i18n = I18n::new("en");
+    let drawn = render_detail_with_status(VmStatus::Stopped, false, &i18n);
+
+    // The memory presets are the clearest fingerprint of the old row. Whole
+    // pieces of text, not substrings: the range note says "128 MB-64 GB",
+    // which contains "4 GB" without being a preset button.
+    for gone in ["16 GB", "32 GB", "4 GB", "1 GB", "2 GB", "8 GB"] {
+        assert!(
+            !drawn.lines().any(|line| line.trim() == gone),
+            "the preset button {gone} is still drawn:\n{drawn}"
+        );
+    }
+
+    // The label belongs to the row once, not twice.
+    let cores_label = i18n.t("cores");
+    assert_eq!(
+        drawn.matches(&cores_label).count(),
+        1,
+        "{cores_label:?} appears more than once in the System tab:\n{drawn}"
+    );
+
+    // The bounds are stated, since nothing else shows them any more.
+    assert!(
+        drawn.contains("1-32") || drawn.contains("1–32"),
+        "the permitted range for cores is nowhere to be seen:\n{drawn}"
+    );
+}
+
+/// The header summary earns its place only where the values are not already
+/// on screen.
+///
+/// In the System tab the four figures sat 150 pixels above the very fields
+/// that hold them -- a summary of something you are already looking at. In
+/// Storage or Network nothing else shows them, so there it stays.
+#[test]
+fn test_the_header_does_not_repeat_what_the_tab_below_already_shows() {
+    let i18n = I18n::new("en");
+
+    // "Processing", not "Architecture": the form's own label for the
+    // architecture field reads the same as the header's, so that word
+    // cannot tell the two apart. This one appears in the header only.
+    let header_only = i18n.t("card_processing");
+
+    let on_system = render_detail_on_tab(DetailTab::System, &i18n);
+    assert!(
+        !on_system.contains(header_only),
+        "the System tab repeats its figures in the header:\n{on_system}"
+    );
+
+    let on_storage = render_detail_on_tab(DetailTab::Storage, &i18n);
+    assert!(
+        on_storage.contains(header_only),
+        "the Storage tab has nothing else showing the cores:\n{on_storage}"
+    );
+}
+
+/// Labels are written, not shouted.
+///
+/// ALL CAPS reads as generic interface furniture and is harder to scan; the
+/// words themselves carry the meaning.
+#[test]
+fn test_the_header_labels_are_not_shouted() {
+    let i18n = I18n::new("en");
+    for key in [
+        "card_architecture",
+        "card_processing",
+        "card_memory",
+        "card_accelerator",
+    ] {
+        let label = i18n.t(key);
+        assert_ne!(
+            label,
+            label.to_uppercase(),
+            "{key} is set in capitals: {label:?}"
+        );
+    }
+}
+
+/// The panel as drawn with a given tab open.
+fn render_detail_on_tab(tab: DetailTab, i18n: &I18n) -> String {
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = tab;
+    let mut modal = CreateDiskState::default();
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, i18n, &mut active, None, &mut modal).show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    common::rendered_text(&draw())
+}
+
+/// The disk dialog sets its size the same way the System tab sets cores.
+///
+/// It carried the same arrangement the System tab was cured of: a slider
+/// and a row of preset buttons for one number. A person who has learnt how
+/// one number is set in this program should not have to learn it again in
+/// the next window.
+#[test]
+fn test_the_disk_dialog_sets_its_size_in_one_place_too() {
+    let i18n = I18n::new("en");
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::Storage;
+    let mut modal = CreateDiskState {
+        open: true,
+        // A size matching none of the old presets, so the value in the field
+        // cannot be mistaken for one of the buttons being looked for.
+        size_gb: 77,
+        ..Default::default()
+    };
+
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal).show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+
+    assert!(
+        drawn.contains("77 GB"),
+        "the size field does not show the value it was given:\n{drawn}"
+    );
+
+    for gone in ["10 GB", "20 GB", "40 GB", "64 GB", "100 GB", "250 GB"] {
+        assert!(
+            !drawn.lines().any(|line| line.trim() == gone),
+            "the preset button {gone} is still drawn:\n{drawn}"
+        );
+    }
+    assert!(
+        drawn.contains("1-1000"),
+        "the permitted range for a disk is nowhere to be seen:\n{drawn}"
+    );
+}

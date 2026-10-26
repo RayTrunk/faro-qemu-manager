@@ -4,15 +4,40 @@
 use egui::{Color32, Context};
 use faro_qem::ui::*;
 
+/// The colours that carry meaning have to be told apart at a glance.
+///
+/// "One colour, one meaning" only works if a person can see which is which.
+/// This used to be a list of the same RGB values written twice, which
+/// proved only that they had been copied correctly.
 #[test]
-fn test_theme_colors() {
-    assert_eq!(COLOR_RUNNING, Color32::from_rgb(16, 185, 129));
-    assert_eq!(COLOR_STOPPED, Color32::from_rgb(113, 113, 122));
-    assert_eq!(COLOR_ERROR, Color32::from_rgb(225, 29, 72));
-    assert_eq!(COLOR_PRIMARY, Color32::from_rgb(0, 47, 167));
-    assert_eq!(COLOR_PRIMARY_HOVER, Color32::from_rgb(26, 68, 189));
-    assert_eq!(COLOR_ACCENT, Color32::from_rgb(99, 102, 241));
-    assert_eq!(COLOR_WARNING, Color32::from_rgb(245, 158, 11));
+fn test_the_meaningful_colours_are_distinguishable_from_each_other() {
+    let meanings = [
+        ("running", COLOR_RUNNING),
+        ("error", COLOR_ERROR),
+        ("warning", COLOR_WARNING),
+        ("primary", COLOR_PRIMARY),
+    ];
+
+    for (i, (name_a, a)) in meanings.iter().enumerate() {
+        for (name_b, b) in meanings.iter().skip(i + 1) {
+            let apart = (a.r() as i32 - b.r() as i32).abs()
+                + (a.g() as i32 - b.g() as i32).abs()
+                + (a.b() as i32 - b.b() as i32).abs();
+            assert!(
+                apart > 150,
+                "{name_a} and {name_b} are only {apart} apart across the \
+                 channels -- too close for one to mean something the other \
+                 does not"
+            );
+        }
+    }
+
+    // Hover is the same colour, brighter -- not a different one.
+    let hue_shift = (COLOR_PRIMARY.b() as i32 - COLOR_PRIMARY_HOVER.b() as i32).abs();
+    assert!(
+        hue_shift < 60,
+        "the hover tint is a different blue, not a brighter one"
+    );
 }
 
 #[test]
@@ -195,4 +220,153 @@ fn test_load_app_logo_and_icon() {
     assert_eq!(icon_data.width, 128);
     assert_eq!(icon_data.height, 128);
     assert_eq!(icon_data.rgba.len(), 128 * 128 * 4);
+}
+
+/// The program ships its own typefaces rather than borrowing whatever the
+/// toolkit defaults to. IBM Plex is chosen on purpose: it was drawn for
+/// technical products, its figures are tabular -- so 8192 and 2048 line up
+/// in a column -- and its SIL Open Font Licence travels with a GPL build.
+#[test]
+fn test_the_program_brings_its_own_typefaces() {
+    let fonts = faro_qem::ui::theme::font_definitions();
+
+    for face in ["plex_sans", "plex_sans_semibold", "plex_mono"] {
+        assert!(
+            fonts.font_data.contains_key(face),
+            "{face} is missing from the font definitions"
+        );
+    }
+
+    let proportional = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .expect("a proportional family");
+    assert_eq!(
+        proportional.first().map(String::as_str),
+        Some("plex_sans"),
+        "body text must be set in Plex Sans, not the toolkit default"
+    );
+
+    let mono = fonts
+        .families
+        .get(&egui::FontFamily::Monospace)
+        .expect("a monospace family");
+    assert_eq!(
+        mono.first().map(String::as_str),
+        Some("plex_mono"),
+        "values must be set in Plex Mono so columns of figures align"
+    );
+
+    // Emoji still have to resolve: the interface uses them as icons, and a
+    // typeface without them would leave empty boxes behind.
+    assert!(
+        proportional.len() > 1,
+        "the proportional family needs a fallback for glyphs Plex lacks"
+    );
+}
+
+/// Defining the typefaces is not the same as installing them. This checks
+/// the glyphs actually change: a fresh context measures the toolkit's own
+/// font, a configured one measures Plex, and the two cannot be identical.
+#[test]
+fn test_configuring_the_interface_installs_those_typefaces() {
+    let plain = Context::default();
+    let configured = Context::default();
+    faro_qem::ui::theme::configure_modern_fonts(&configured);
+
+    // Inside a frame: egui refuses to hand out font metrics outside one.
+    let measure = |ctx: &Context| {
+        let mut width = 0.0;
+        let _ = ctx.run(Default::default(), |ctx| {
+            width = ctx.fonts(|f| {
+                f.glyph_width(&egui::FontId::proportional(14.0), 'm')
+                    + f.glyph_width(&egui::FontId::monospace(13.0), '8')
+            });
+        });
+        width
+    };
+
+    let before = measure(&plain);
+    let after = measure(&configured);
+
+    assert!(
+        (before - after).abs() > 0.01,
+        "the glyphs are unchanged ({before} vs {after}): the typefaces were \
+         defined but never handed to the context"
+    );
+}
+
+/// Contrast ratio between two colours, per WCAG 2.1.
+fn contrast(a: Color32, b: Color32) -> f32 {
+    fn channel(v: u8) -> f32 {
+        let c = v as f32 / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    fn luminance(c: Color32) -> f32 {
+        0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+    }
+    let (l1, l2) = (luminance(a), luminance(b));
+    let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Every colour the dark theme writes text in has to be readable on it.
+///
+/// This replaces an older test that asserted the exact RGB values, which
+/// only checked that the numbers had been copied twice. What matters is
+/// whether a person can read the result: WCAG asks 4.5:1 for body text.
+/// The deep blue this project started with managed 1.8:1 on its own
+/// background -- technically present, practically invisible.
+#[test]
+fn test_every_colour_the_dark_theme_writes_in_is_readable_on_it() {
+    let bg = COLOR_DARK_BG;
+
+    for (name, colour, floor) in [
+        ("primary", COLOR_PRIMARY, 4.5),
+        ("running", COLOR_RUNNING, 4.5),
+        ("error", COLOR_ERROR, 4.5),
+        ("warning", COLOR_WARNING, 4.5),
+        // Stopped is the quiet state: it labels rather than warns, so the
+        // 3:1 floor for non-essential interface text applies.
+        ("stopped", COLOR_STOPPED, 3.0),
+    ] {
+        let ratio = contrast(colour, bg);
+        assert!(
+            ratio >= floor,
+            "{name} reaches only {ratio:.2}:1 against the dark background, \
+             needs {floor}:1"
+        );
+    }
+}
+
+/// The surfaces have to be distinguishable from one another, but gently.
+///
+/// A panel, a card and a border that are all within a hair of each other
+/// read as one flat slab; one that jumps reads as a hole in the screen.
+#[test]
+fn test_the_dark_surfaces_separate_without_shouting() {
+    let steps = [
+        (
+            "background to surface",
+            contrast(COLOR_DARK_BG, COLOR_DARK_SURFACE),
+        ),
+        (
+            "surface to border",
+            contrast(COLOR_DARK_SURFACE, COLOR_DARK_BORDER),
+        ),
+    ];
+    for (what, ratio) in steps {
+        assert!(
+            ratio > 1.08,
+            "{what} is only {ratio:.3}:1 -- the two read as one surface"
+        );
+        assert!(
+            ratio < 2.2,
+            "{what} is {ratio:.3}:1 -- that is a hard edge, not a step"
+        );
+    }
 }
