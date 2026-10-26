@@ -350,29 +350,21 @@ impl FaroQemApp {
         // yet, and that answer is trustworthy.
         let list_was_there = vms_path.exists();
         let mut vms_loaded = true;
-        let (mut vms, vms_write_blocked, may_seed) = match try_load_vms(&vms_path) {
-            Ok(loaded) => (loaded, false, true),
+        let (vms, vms_write_blocked) = match try_load_vms(&vms_path) {
+            Ok(loaded) => (loaded, false),
             Err(why) => {
                 vms_loaded = !list_was_there;
-                let may_seed = recovery_for(&why) == ConfigRecovery::StartFresh;
                 let (notice, blocked) = recover_config(&i18n, &vms_path, &why);
                 notices.extend(notice);
-                (Vec::new(), blocked, may_seed)
+                (Vec::new(), blocked)
             }
         };
 
-        if vms.is_empty() && may_seed {
-            let mut default_vm = VmConfig::default();
-            default_vm.id = Uuid::new_v4();
-            default_vm.name = "Debian 12".to_string();
-            default_vm.arch = settings.default_arch;
-            default_vm.machine_type = default_vm.arch.default_machine().to_string();
-            default_vm.cpu_model = default_vm.arch.default_cpu().to_string();
-            if let Err(e) = save_vms(&vms_path, &[default_vm.clone()]) {
-                notices.push(save_failure_notice(&i18n, &vms_path, &e));
-            }
-            vms.push(default_vm);
-        }
+        // No sample machine is invented here. Seeding one was a convenience
+        // while developing, but it meant that anyone installing FARO found a
+        // machine called "Debian 12" they had never made -- and that the
+        // program wrote vms.json to their disk before they had asked for
+        // anything. An empty list is the honest state of a fresh install.
 
         let selected_vm_id = vms.first().map(|v| v.id);
 

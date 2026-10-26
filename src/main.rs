@@ -8,6 +8,15 @@
 // FITNESS FOR A PARTICULAR PURPOSE. See the LICENSE file in this
 // repository, or <https://www.gnu.org/licenses/>.
 
+// No console window behind the main window. Windows allocates one for any
+// program whose PE subsystem says CONSOLE, which is what Rust emits unless
+// asked otherwise -- that is why 0.9.0 opened a black window on every
+// start.
+//
+// Only for release builds: a debug build keeps its console, because that is
+// where `cargo run` prints and where a panic message can still be read.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use eframe::egui;
 use faro_qem::app::FaroQemApp;
 use faro_qem::ui::theme::load_app_icon;

@@ -84,17 +84,27 @@ fn test_corrupt_vms_json_is_preserved_not_overwritten() {
 }
 
 #[test]
-fn test_missing_vms_json_still_creates_the_default_vm() {
+fn test_a_first_start_invents_no_machine_and_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let app = FaroQemApp::with_paths(
-        dir.path().join("settings.json"),
-        dir.path().join("vms.json"),
-        None,
-    );
+    let vms_path = dir.path().join("vms.json");
+    let app = FaroQemApp::with_paths(dir.path().join("settings.json"), vms_path.clone(), None);
 
-    assert_eq!(app.vms.len(), 1);
-    assert_eq!(app.vms[0].name, "Debian 12");
+    // The program used to seed a sample machine called "Debian 12" here and
+    // save it at once. Someone who installs FARO then finds a machine they
+    // never made -- and a file written to their disk before they asked for
+    // anything at all.
+    assert!(
+        app.vms.is_empty(),
+        "a first start must not invent a machine, found: {:?}",
+        app.vms.iter().map(|v| &v.name).collect::<Vec<_>>()
+    );
+    assert!(
+        !vms_path.exists(),
+        "a first start must not write {} before the user has made anything",
+        vms_path.display()
+    );
     assert!(app.notices.is_empty(), "a first start is not a problem");
+    assert_eq!(app.selected_vm_id, None, "there is nothing to select yet");
 }
 
 #[test]

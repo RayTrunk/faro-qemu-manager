@@ -495,3 +495,22 @@ pub fn rendered_settings_with_qemu(
     });
     rendered_text(&output)
 }
+
+/// One plain machine in the app's list, and its id.
+///
+/// The application used to seed a sample machine on a first start, and many
+/// tests leaned on it being there. It no longer does -- a fresh install must
+/// not invent a machine -- so a test that needs one says so here. No disk
+/// image and no files: for a test that only needs a machine to exist, the
+/// machine is the point, not its storage.
+pub fn push_plain_vm(app: &mut faro_qem::app::FaroQemApp) -> uuid::Uuid {
+    use faro_qem::config::VmConfig;
+
+    let mut vm = VmConfig::new_default("Test VM", app.settings.default_arch);
+    vm.machine_type = vm.arch.default_machine().to_string();
+    vm.cpu_model = vm.arch.default_cpu().to_string();
+    let id = vm.id;
+    app.vms.push(vm);
+    app.selected_vm_id = Some(id);
+    id
+}

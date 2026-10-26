@@ -29,12 +29,12 @@ fn test_faro_qem_app_initialization_defaults() {
 
     let app = FaroQemApp::with_paths(settings_path.clone(), vms_path.clone(), None);
 
-    // Default VM was initialized
-    assert_eq!(app.vms.len(), 1);
-    let vm = &app.vms[0];
-    assert_eq!(vm.name, "Debian 12");
-    assert_eq!(vm.arch, Arch::X86_64);
-    assert_eq!(app.selected_vm_id, Some(vm.id));
+    // No machine is invented on a first start, and nothing is selected --
+    // there is nothing to select. A sample machine used to be seeded here,
+    // which left someone who had just installed FARO looking at a machine
+    // they never made.
+    assert!(app.vms.is_empty());
+    assert_eq!(app.selected_vm_id, None);
 
     // Default settings were initialized
     assert_eq!(app.settings.theme, "dark");
@@ -47,10 +47,9 @@ fn test_faro_qem_app_initialization_defaults() {
     assert!(app.running_processes.is_empty());
     assert!(app.status_map.is_empty());
 
-    // File persistence of initial default VM
-    let loaded_vms = load_vms(&vms_path);
-    assert_eq!(loaded_vms.len(), 1);
-    assert_eq!(loaded_vms[0].id, vm.id);
+    // And nothing was written: the user has not asked for anything yet.
+    assert!(!vms_path.exists());
+    assert!(load_vms(&vms_path).is_empty());
 }
 
 #[test]
@@ -60,7 +59,7 @@ fn test_faro_qem_app_sidebar_actions() {
     let vms_path = dir.path().join("vms.json");
 
     let mut app = FaroQemApp::with_paths(settings_path, vms_path.clone(), None);
-    let initial_vm_id = app.vms[0].id;
+    let initial_vm_id = common::push_plain_vm(&mut app);
 
     // This test is about the direct way, which a fresh installation no longer
     // defaults to. The wizard way is covered by its own test.
@@ -112,7 +111,7 @@ fn test_faro_qem_app_detail_actions_and_persistence() {
     let vms_path = dir.path().join("vms.json");
 
     let mut app = FaroQemApp::with_paths(settings_path, vms_path.clone(), None);
-    let vm_id = app.vms[0].id;
+    let vm_id = common::push_plain_vm(&mut app);
 
     // Mutate VM configuration
     app.vms[0].name = "Arch Linux Production".to_string();
@@ -137,7 +136,7 @@ fn test_faro_qem_app_process_qemu_events_lifecycle() {
     let dir = tempdir().unwrap();
     let mut app =
         FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
-    let vm_id = app.vms[0].id;
+    let vm_id = common::push_plain_vm(&mut app);
 
     // Simulate process registration with a dummy channel
     let (tx, rx) = mpsc::channel();
@@ -196,7 +195,7 @@ fn test_faro_qem_app_process_qemu_events_error_exit() {
     let dir = tempdir().unwrap();
     let mut app =
         FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
-    let vm_id = app.vms[0].id;
+    let vm_id = common::push_plain_vm(&mut app);
 
     let (tx, rx) = mpsc::channel();
     let rustc_bin = std::path::PathBuf::from("rustc");
@@ -234,7 +233,7 @@ fn test_faro_qem_app_launch_binary_not_found() {
     let dir = tempdir().unwrap();
     let mut app =
         FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
-    let vm_id = app.vms[0].id;
+    let vm_id = common::push_plain_vm(&mut app);
 
     // Set custom QEMU directory to an empty temp dir where no binaries exist
     let empty_dir = dir.path().join("empty_qemu");
@@ -261,7 +260,7 @@ fn test_faro_qem_app_stop_vm_cleans_up_process() {
     let dir = tempdir().unwrap();
     let mut app =
         FaroQemApp::with_paths(dir.path().join("s.json"), dir.path().join("v.json"), None);
-    let vm_id = app.vms[0].id;
+    let vm_id = common::push_plain_vm(&mut app);
 
     let (_tx, rx) = mpsc::channel();
     let rustc_bin = std::path::PathBuf::from("rustc");
@@ -1613,7 +1612,7 @@ fn test_a_finished_disk_is_attached_to_the_machine_that_asked() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("vms");
     let mut app = common::app_with_vm_dir(&root);
-    let id = app.vms[0].id;
+    let id = common::push_plain_vm(&mut app);
     app.selected_vm_id = Some(id);
     let before = app.vms[0].drives.len();
     let target = dir.path().join("attached.qcow2");
@@ -1829,7 +1828,7 @@ fn test_force_stopping_a_stale_record_never_kills_a_stranger() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("vms");
     let mut app = common::app_with_vm_dir(&root);
-    let id = app.vms[0].id;
+    let id = common::push_plain_vm(&mut app);
 
     let mut stranger = common::spawn_long_sleep();
     let dead_port = faro_qem::qmp::free_local_port().unwrap(); // nothing listens
@@ -2217,7 +2216,7 @@ fn test_every_control_is_reachable_at_the_default_window_size() {
         dir.path().join("vms.json"),
         Some(&font_ctx),
     );
-    let id = app.vms[0].id;
+    let id = common::push_plain_vm(&mut app);
     app.selected_vm_id = Some(id);
 
     // The smallest window the application allows, and the one it opens
