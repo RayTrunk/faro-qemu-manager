@@ -55,6 +55,12 @@ pub const COLOR_DARK_SURFACE: Color32 = Color32::from_rgb(31, 34, 40);
 pub const COLOR_DARK_SURFACE_HOVER: Color32 = Color32::from_rgb(42, 46, 54);
 pub const COLOR_DARK_BORDER: Color32 = Color32::from_rgb(55, 60, 70);
 
+/// Sunk below the panel: the console's terminal, the command line under it.
+/// Darker than the background on purpose -- a surface you read *into*
+/// rather than one that sits on top -- but no longer the near-black the
+/// rest of the interface used to be, which left it indistinguishable.
+pub const COLOR_DARK_SUNKEN: Color32 = Color32::from_rgb(16, 18, 23);
+
 // Light theme surface colors (Swiss High-Modernist Light)
 pub const COLOR_LIGHT_BG: Color32 = Color32::from_rgb(247, 247, 248);
 pub const COLOR_LIGHT_SURFACE: Color32 = Color32::from_rgb(255, 255, 255);

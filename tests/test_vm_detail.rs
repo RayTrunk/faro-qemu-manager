@@ -986,3 +986,50 @@ fn render_detail_on_tab(tab: DetailTab, i18n: &I18n) -> String {
     let _ = draw();
     common::rendered_text(&draw())
 }
+
+/// The disk dialog sets its size the same way the System tab sets cores.
+///
+/// It carried the same arrangement the System tab was cured of: a slider
+/// and a row of preset buttons for one number. A person who has learnt how
+/// one number is set in this program should not have to learn it again in
+/// the next window.
+#[test]
+fn test_the_disk_dialog_sets_its_size_in_one_place_too() {
+    let i18n = I18n::new("en");
+    let mut vm = VmConfig::new_default("probe", Arch::X86_64);
+    let mut active = DetailTab::Storage;
+    let mut modal = CreateDiskState {
+        open: true,
+        // A size matching none of the old presets, so the value in the field
+        // cannot be mistaken for one of the buttons being looked for.
+        size_gb: 77,
+        ..Default::default()
+    };
+
+    let ctx = Context::default();
+    let mut draw = || {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                VmDetailView::new(&mut vm, false, &i18n, &mut active, None, &mut modal).show(ui);
+            });
+        })
+    };
+    let _ = draw();
+    let drawn = common::rendered_text(&draw());
+
+    assert!(
+        drawn.contains("77 GB"),
+        "the size field does not show the value it was given:\n{drawn}"
+    );
+
+    for gone in ["10 GB", "20 GB", "40 GB", "64 GB", "100 GB", "250 GB"] {
+        assert!(
+            !drawn.lines().any(|line| line.trim() == gone),
+            "the preset button {gone} is still drawn:\n{drawn}"
+        );
+    }
+    assert!(
+        drawn.contains("1-1000"),
+        "the permitted range for a disk is nowhere to be seen:\n{drawn}"
+    );
+}

@@ -55,9 +55,16 @@ impl<'a> VmDetailView<'a> {
                     }
 
                     // [✨ Create New Disk Image]
-                    let create_modal_btn =
-                        egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("create_disk")))
-                            .fill(COLOR_PRIMARY);
+                    let create_modal_btn = egui::Button::new(
+                        egui::RichText::new(format!(
+                            "{} {}",
+                            icons::ADD,
+                            self.i18n.t("create_disk")
+                        ))
+                        .color(COLOR_PRIMARY),
+                    )
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0, COLOR_PRIMARY));
                     if ui.add(create_modal_btn).clicked() {
                         let default_name =
                             format!("{}.qcow2", self.vm.name.replace(' ', "_").to_lowercase());
@@ -342,20 +349,23 @@ impl<'a> VmDetailView<'a> {
 
                         // Size (GB)
                         ui.label(egui::RichText::new(self.i18n.t("size_gb")).strong());
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::Slider::new(&mut self.disk_modal.size_gb, 1..=1000)
-                                        .text("GB"),
-                                );
-                            });
-                            ui.horizontal(|ui| {
-                                for &s in &[10, 20, 40, 64, 100, 250] {
-                                    if ui.small_button(format!("{} GB", s)).clicked() {
-                                        self.disk_modal.size_gb = s;
-                                    }
-                                }
-                            });
+                        ui.horizontal(|ui| {
+                            // The same control the System tab uses for cores
+                            // and memory. Someone who has learnt how a number
+                            // is set in this program should not have to learn
+                            // it again in the next window.
+                            ui.add_sized(
+                                [120.0, 20.0],
+                                egui::DragValue::new(&mut self.disk_modal.size_gb)
+                                    .range(1..=1000)
+                                    .speed(0.5)
+                                    .suffix(" GB"),
+                            );
+                            ui.label(
+                                egui::RichText::new("1-1000 GB")
+                                    .size(11.0)
+                                    .color(ui.visuals().weak_text_color()),
+                            );
                         });
                         ui.end_row();
                     });
@@ -386,9 +396,12 @@ impl<'a> VmDetailView<'a> {
 
                 // Action buttons
                 ui.horizontal(|ui| {
-                    let create_btn =
-                        egui::Button::new(format!("{} {}", icons::ADD, self.i18n.t("create")))
-                            .fill(COLOR_PRIMARY);
+                    let create_btn = egui::Button::new(
+                        egui::RichText::new(format!("{} {}", icons::ADD, self.i18n.t("create")))
+                            .color(COLOR_PRIMARY),
+                    )
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0, COLOR_PRIMARY));
                     if ui.add_enabled(!self.disk_modal.busy, create_btn).clicked() {
                         let trimmed = self.disk_modal.path_buf.trim();
                         if trimmed.is_empty() {
