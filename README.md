@@ -77,7 +77,7 @@ cargo test
 
 ## Status
 
-**0.9.1.** The feature set above is implemented and covered by 371 automated
+**0.9.2.** The feature set above is implemented and covered by 380 automated
 tests, including tests that start a real QEMU and talk to it over QMP.
 
 It is not 1.0.0 for one reason: a Windows 11 installation has not yet been
