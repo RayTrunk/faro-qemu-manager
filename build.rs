@@ -4,8 +4,8 @@ fn main() {
     res.set_icon("assets/icon.ico");
     res.set("FileDescription", "FARO QEMU MANAGER");
     res.set("ProductName", "FARO QEMU MANAGER");
-    res.set("ProductVersion", "0.9.1.0");
-    res.set("FileVersion", "0.9.1.0");
+    res.set("ProductVersion", "0.9.2.0");
+    res.set("FileVersion", "0.9.2.0");
     res.set("LegalCopyright", "(C) R.Trunk 2026");
     res.set("CompanyName", "R.Trunk");
     res.set("OriginalFilename", "faro-qem.exe");
